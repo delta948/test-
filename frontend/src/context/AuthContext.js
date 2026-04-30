@@ -9,6 +9,22 @@ export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // Add axios interceptor for automatic token injection
+  useEffect(() => {
+    const interceptor = axios.interceptors.request.use(
+      (config) => {
+        const token = localStorage.getItem('token');
+        if (token) {
+          config.headers.Authorization = `Bearer ${token}`;
+        }
+        return config;
+      },
+      (error) => Promise.reject(error)
+    );
+    
+    return () => axios.interceptors.request.eject(interceptor);
+  }, []);
+
   useEffect(() => {
     const token = localStorage.getItem('token');
     const savedUser = localStorage.getItem('user');

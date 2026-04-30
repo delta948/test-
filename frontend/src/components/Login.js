@@ -53,7 +53,7 @@ const Login = () => {
               </svg>
             </div>
             <h2 className="text-3xl font-bold text-gray-900">Вход в систему</h2>
-            <p className="text-gray-500 mt-2">Видеотестирование</p>
+            <p className="text-gray-500 mt-2">Тестирование</p>
           </div>
           
           {error && (

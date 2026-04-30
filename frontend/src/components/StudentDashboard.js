@@ -5,51 +5,102 @@ import axios from 'axios';
 const API_URL = 'http://localhost:8000/api';
 
 const StudentDashboard = () => {
-  const [availableTests, setAvailableTests] = useState([]);
-  const [attempts, setAttempts] = useState([]);
+  const [questions, setQuestions] = useState([]);
+  const [answers, setAnswers] = useState({});
   const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [showResult, setShowResult] = useState(false);
+  const [result, setResult] = useState(null);
   const navigate = useNavigate();
 
   useEffect(() => {
-    fetchData();
+    fetchQuestions();
   }, []);
 
-  const fetchData = async () => {
+  const fetchQuestions = async () => {
     try {
-      const [testsRes, attemptsRes] = await Promise.all([
-        axios.get(`${API_URL}/student/tests/`),
-        axios.get(`${API_URL}/student/attempts/`)
-      ]);
-      
-      setAvailableTests(testsRes.data);
-      setAttempts(attemptsRes.data);
+      const testsRes = await axios.get(`${API_URL}/student/tests/`);
+      if (testsRes.data.length > 0) {
+        const testId = testsRes.data[0].id;
+        const questionsRes = await axios.get(`${API_URL}/tests/${testId}/questions/`);
+        setQuestions(questionsRes.data);
+      }
     } catch (error) {
-      console.error('Error fetching data:', error);
+      console.error('Error fetching questions:', error);
     } finally {
       setLoading(false);
     }
   };
 
-  const startTest = async (testId) => {
-    try {
-      const response = await axios.post(`${API_URL}/student/tests/${testId}/start/`);
-      const attemptId = response.data.attempt.id;
-      
-      localStorage.setItem(`test_progress_${attemptId}`, '0');
-      
-      navigate(`/test/${attemptId}`);
-    } catch (error) {
-      const errorMsg = error.response?.data?.error || 'Ошибка при начале теста';
-      alert(errorMsg);
+  const selectAnswer = (questionId, option) => {
+    setAnswers(prev => ({
+      ...prev,
+      [questionId]: option
+    }));
+  };
+
+  const completeTest = async () => {
+    const unanswered = questions.filter(q => !answers[q.id]);
+    if (unanswered.length > 0) {
+      alert(`Пожалуйста, ответьте на все вопросы. Осталось: ${unanswered.length}`);
+      return;
     }
-  };
 
-  const continueTest = (attemptId) => {
-    navigate(`/test/${attemptId}`);
-  };
+    setSubmitting(true);
+    try {
+      const token = localStorage.getItem('token');
+      const testsRes = await axios.get(`${API_URL}/student/tests/`);
+      const testId = testsRes.data[0].id;
 
-  const viewResult = (attemptId) => {
-    navigate(`/result/${attemptId}`);
+      // Создаем попытку
+      const startRes = await axios.post(
+        `${API_URL}/student/tests/${testId}/start/`,
+        {},
+        {
+          headers: { 'Authorization': `Bearer ${token}` }
+        }
+      );
+      const attemptId = startRes.data.attempt.id;
+
+      // Отправляем ответы
+      for (const questionId in answers) {
+        await axios.post(
+          `${API_URL}/student/attempts/${attemptId}/answer/`,
+          {
+            question_id: parseInt(questionId),
+            selected_option: answers[questionId]
+          },
+          {
+            headers: { 'Authorization': `Bearer ${token}` }
+          }
+        );
+      }
+
+      // Завершаем тест
+      await axios.post(
+        `${API_URL}/student/attempts/${attemptId}/complete/`,
+        {},
+        {
+          headers: { 'Authorization': `Bearer ${token}` }
+        }
+      );
+
+      // Получаем результат
+      const resultRes = await axios.get(
+        `${API_URL}/student/attempts/${attemptId}/result/`,
+        {
+          headers: { 'Authorization': `Bearer ${token}` }
+        }
+      );
+
+      setResult(resultRes.data);
+      setShowResult(true);
+    } catch (error) {
+      console.error('Error completing test:', error);
+      alert('Ошибка при завершении теста');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   if (loading) {
@@ -60,125 +111,131 @@ const StudentDashboard = () => {
     );
   }
 
-  return (
-    <div className="max-w-5xl mx-auto animate-fade-in">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900">Панель ученика</h1>
-        <p className="text-gray-500 mt-1">Управляйте тестами и просматривайте результаты</p>
-      </div>
-      
-      {attempts.filter(a => a.status === 'in_progress').length > 0 && (
-        <div className="dashboard-card border-l-4 border-amber-500 mb-6">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center">
-              <svg className="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            </div>
-            <h5 className="text-lg font-semibold text-gray-900">Тесты в процессе</h5>
-          </div>
-          {attempts
-            .filter(a => a.status === 'in_progress')
-            .map(attempt => (
-              <div key={attempt.id} className="test-list-item">
-                <div>
-                  <h6 className="font-medium text-gray-900">{attempt.test_title}</h6>
-                  <p className="text-sm text-gray-500">
-                    Отвечено: <span className="font-medium text-amber-600">{attempt.answered_count || 0}</span> / {attempt.total_questions || 100}
-                  </p>
-                </div>
-                <button 
-                  className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white font-medium rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-0.5"
-                  onClick={() => continueTest(attempt.id)}
-                >
-                  Продолжить
-                </button>
-              </div>
-            ))}
-        </div>
-      )}
+  if (showResult && result) {
+    const correct = result.correct_count;
+    const total = result.total_questions;
+    const incorrect = total - correct;
+    const percentage = Math.round((correct / total) * 100);
 
-      <div className="dashboard-card mb-6">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 bg-green-100 rounded-xl flex items-center justify-center">
-            <svg className="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-          </div>
-          <h5 className="text-lg font-semibold text-gray-900">Доступные тесты</h5>
-        </div>
-        {availableTests.length === 0 ? (
-          <div className="empty-state py-12">
-            <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-              <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-              </svg>
+    return (
+      <div className="max-w-2xl mx-auto px-4 py-8">
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-8">
+          <h1 className="text-2xl font-bold text-gray-900 mb-6 text-center">Результат теста</h1>
+          
+          <div className="grid grid-cols-3 gap-4 mb-8">
+            <div className="bg-green-50 rounded-xl p-4 text-center">
+              <div className="text-3xl font-bold text-green-600">{correct}</div>
+              <div className="text-sm text-gray-600">Правильных</div>
             </div>
-            <p className="text-gray-900 font-medium">Нет доступных тестов</p>
-            <p className="text-sm text-gray-500 mt-1">
-              Все тесты пройдены или пока не созданы
+            <div className="bg-red-50 rounded-xl p-4 text-center">
+              <div className="text-3xl font-bold text-red-600">{incorrect}</div>
+              <div className="text-sm text-gray-600">Неправильных</div>
+            </div>
+            <div className="bg-blue-50 rounded-xl p-4 text-center">
+              <div className="text-3xl font-bold text-blue-600">{percentage}%</div>
+              <div className="text-sm text-gray-600">Результат</div>
+            </div>
+          </div>
+
+          <div className="text-center mb-6">
+            <p className="text-gray-700">
+              Вы ответили правильно на <span className="font-semibold text-green-600">{correct}</span> из <span className="font-semibold">{total}</span> вопросов
             </p>
           </div>
-        ) : (
-          availableTests.map(test => (
-            <div key={test.id} className="test-list-item">
-              <div>
-                <h6 className="font-medium text-gray-900">{test.title}</h6>
-                <p className="text-sm text-gray-500">
-                  {test.question_count} вопросов · Учитель: {test.teacher_name}
-                </p>
-              </div>
-              <button 
-                className="px-4 py-2 bg-gradient-to-r from-green-500 to-emerald-600 text-white font-medium rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-0.5"
-                onClick={() => startTest(test.id)}
-              >
-                Начать тест
-              </button>
-            </div>
-          ))
-        )}
-      </div>
 
-      <div className="dashboard-card">
-        <div className="flex items-center gap-3 mb-4">
-          <div className="w-10 h-10 bg-primary-100 rounded-xl flex items-center justify-center">
-            <svg className="w-5 h-5 text-primary-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
-            </svg>
+          <div className="flex justify-center gap-4">
+            <button
+              onClick={() => {
+                setShowResult(false);
+                setAnswers({});
+                setQuestions([]);
+                fetchQuestions();
+              }}
+              className="px-6 py-3 bg-green-500 hover:bg-green-600 text-white font-medium rounded-xl transition-colors"
+            >
+              Пройти заново
+            </button>
+            <button
+              onClick={() => navigate('/student-dashboard')}
+              className="px-6 py-3 bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium rounded-xl transition-colors"
+            >
+              На главную
+            </button>
           </div>
-          <h5 className="text-lg font-semibold text-gray-900">История попыток</h5>
         </div>
-        {attempts.filter(a => a.status === 'completed').length === 0 ? (
-          <div className="empty-state py-12">
-            <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-              <svg className="w-8 h-8 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-              </svg>
-            </div>
-            <p className="text-gray-900 font-medium">Вы еще не прошли ни одного теста</p>
-          </div>
-        ) : (
-          attempts
-            .filter(a => a.status === 'completed')
-            .map(attempt => (
-              <div key={attempt.id} className="test-list-item">
-                <div>
-                  <h6 className="font-medium text-gray-900">{attempt.test_title}</h6>
-                  <p className="text-sm text-gray-500">
-                    Результат: <span className={`font-medium ${attempt.score >= 80 ? 'text-green-600' : attempt.score >= 60 ? 'text-amber-600' : 'text-red-600'}`}>{attempt.score}</span> / {attempt.total_questions || 100} · 
-                    Завершен: {attempt.completed_at ? new Date(attempt.completed_at).toLocaleDateString('ru-RU') : '-'}
-                  </p>
-                </div>
-                <button 
-                  className="px-4 py-2 bg-white border-2 border-primary-200 text-primary-700 font-medium rounded-xl hover:bg-primary-50 hover:border-primary-300 transition-all duration-200"
-                  onClick={() => viewResult(attempt.id)}
-                >
-                  Результат
-                </button>
-              </div>
-            ))
-        )}
       </div>
+    );
+  }
+
+  const answeredCount = Object.keys(answers).length;
+  const progress = Math.round((answeredCount / questions.length) * 100);
+
+  return (
+    <div className="max-w-4xl mx-auto px-4 py-8">
+      <div className="flex items-center justify-between mb-8">
+        <h1 className="text-2xl font-bold text-gray-900">Аскердик даярдык</h1>
+        <div className="text-sm text-gray-500">
+          {answeredCount} / {questions.length} вопросов ({progress}%)
+        </div>
+      </div>
+      
+      {questions.length === 0 ? (
+        <div className="text-center py-16">
+          <p className="text-gray-900 font-medium text-lg">Нет вопросов</p>
+        </div>
+      ) : (
+        <>
+          <div className="space-y-4 mb-8">
+            {questions.map((q, index) => (
+              <div key={q.id} className="p-6 bg-white rounded-2xl border border-gray-200 shadow-sm">
+                <div className="flex items-start gap-4">
+                  <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center flex-shrink-0">
+                    <span className="text-green-600 font-semibold text-sm">{index + 1}</span>
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="font-semibold text-gray-900 mb-4">{q.text}</h3>
+                    <div className="space-y-2">
+                      {['A', 'B', 'C'].map((option) => {
+                        const optionText = option === 'A' ? q.option_a : option === 'B' ? q.option_b : q.option_c;
+                        const isSelected = answers[q.id] === option;
+                        return (
+                          <div
+                            key={option}
+                            className={`p-3 rounded-xl cursor-pointer transition-colors ${
+                              isSelected
+                                ? 'bg-green-500 text-white border-2 border-green-500'
+                                : 'bg-gray-50 hover:bg-gray-100 border-2 border-transparent'
+                            }`}
+                            onClick={() => selectAnswer(q.id, option)}
+                          >
+                            <span className={isSelected ? 'text-white' : 'text-gray-700'}>
+                              {option}) {optionText}
+                            </span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          <div className="flex justify-center">
+            <button
+              onClick={completeTest}
+              disabled={submitting || answeredCount < questions.length}
+              className={`px-8 py-3 rounded-xl font-medium transition-colors ${
+                submitting || answeredCount < questions.length
+                  ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  : 'bg-green-500 hover:bg-green-600 text-white'
+              }`}
+            >
+              {submitting ? 'Завершение...' : 'Завершить тест'}
+            </button>
+          </div>
+        </>
+      )}
     </div>
   );
 };
