@@ -101,6 +101,16 @@ class TestDetailView(generics.RetrieveUpdateDestroyAPIView):
         return Test.objects.filter(teacher=self.request.user)
 
 
+class TestQuestionsView(generics.ListAPIView):
+    serializer_class = QuestionListSerializer
+    permission_classes = [permissions.AllowAny]
+    
+    def get_queryset(self):
+        test_id = self.kwargs['test_id']
+        test = Test.objects.get(id=test_id)
+        return test.questions.all()
+
+
 class AvailableTestsView(generics.ListAPIView):
     serializer_class = TestListSerializer
     permission_classes = [IsStudent]
@@ -145,8 +155,8 @@ class StartAttemptView(APIView):
                 'attempt': serializer.data
             })
         
-        if test.questions.count() != 100:
-            return Response({'error': 'Тест должен содержать 100 вопросов'}, status=status.HTTP_400_BAD_REQUEST)
+        if test.questions.count() < 1:
+            return Response({'error': 'Тест должен содержать хотя бы 1 вопрос'}, status=status.HTTP_400_BAD_REQUEST)
         
         attempt = Attempt.objects.create(
             student=request.user,

@@ -3,7 +3,7 @@ from django.http import JsonResponse
 from .views import (
     RegisterView, UserProfileView,
     QuestionListCreateView, QuestionDetailView,
-    TestListCreateView, TestDetailView,
+    TestListCreateView, TestDetailView, TestQuestionsView,
     AvailableTestsView, StartAttemptView, GetTestQuestionsView,
     SubmitAnswerView, CompleteTestView, GetTestResultView,
     StudentAttemptsView, TeacherResultsView, TeacherTestResultsView,
@@ -38,6 +38,7 @@ urlpatterns = [
     
     path('tests/', TestListCreateView.as_view(), name='test-list'),
     path('tests/<int:pk>/', TestDetailView.as_view(), name='test-detail'),
+    path('tests/<int:test_id>/questions/', TestQuestionsView.as_view(), name='test-questions'),
     
     path('student/tests/', AvailableTestsView.as_view(), name='available-tests'),
     path('student/attempts/', StudentAttemptsView.as_view(), name='student-attempts'),

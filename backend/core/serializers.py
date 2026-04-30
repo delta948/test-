@@ -76,8 +76,8 @@ class TestCreateSerializer(serializers.ModelSerializer):
         fields = ['id', 'title', 'question_ids']
     
     def validate_question_ids(self, value):
-        if len(value) != 100:
-            raise serializers.ValidationError("Тест должен содержать ровно 100 вопросов")
+        if len(value) < 1:
+            raise serializers.ValidationError("Тест должен содержать хотя бы 1 вопрос")
         
         user = self.context['request'].user
         existing_questions = Question.objects.filter(
