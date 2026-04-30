@@ -1,0 +1,161 @@
+from rest_framework import serializers
+from django.contrib.auth import get_user_model
+from django.db import transaction
+from .models import Question, Test, Attempt, Answer, StudentProfile
+
+User = get_user_model()
+
+
+class UserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'role']
+
+
+class RegisterSerializer(serializers.ModelSerializer):
+    password = serializers.CharField(write_only=True, min_length=6)
+    role = serializers.ChoiceField(choices=[('teacher', 'Учитель'), ('student', 'Ученик')])
+    
+    class Meta:
+        model = User
+        fields = ['username', 'email', 'password', 'role', 'first_name', 'last_name']
+    
+    def validate_role(self, value):
+        if value not in ['teacher', 'student']:
+            raise serializers.ValidationError("Роль должна быть 'teacher' или 'student'")
+        return value
+    
+    def create(self, validated_data):
+        with transaction.atomic():
+            user = User.objects.create_user(
+                username=validated_data['username'],
+                email=validated_data.get('email', ''),
+                password=validated_data['password'],
+                role=validated_data['role'],
+                first_name=validated_data.get('first_name', ''),
+                last_name=validated_data.get('last_name', '')
+            )
+            
+            if user.role == 'student':
+                StudentProfile.objects.create(user=user)
+            
+            return user
+
+
+class QuestionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Question
+        fields = ['id', 'text', 'option_a', 'option_b', 'option_c', 'correct_answer', 'created_at']
+        read_only_fields = ['created_at']
+
+
+class QuestionListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Question
+        fields = ['id', 'text', 'option_a', 'option_b', 'option_c']
+
+
+class TestSerializer(serializers.ModelSerializer):
+    teacher = UserSerializer(read_only=True)
+    question_count = serializers.IntegerField(source='questions.count', read_only=True)
+    questions = QuestionSerializer(many=True, read_only=True)
+    
+    class Meta:
+        model = Test
+        fields = ['id', 'title', 'teacher', 'questions', 'question_count', 'created_at', 'is_active']
+
+
+class TestCreateSerializer(serializers.ModelSerializer):
+    question_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        write_only=True
+    )
+    
+    class Meta:
+        model = Test
+        fields = ['id', 'title', 'question_ids']
+    
+    def validate_question_ids(self, value):
+        if len(value) != 100:
+            raise serializers.ValidationError("Тест должен содержать ровно 100 вопросов")
+        
+        user = self.context['request'].user
+        existing_questions = Question.objects.filter(
+            id__in=value,
+            created_by=user
+        ).values_list('id', flat=True)
+        
+        missing = set(value) - set(existing_questions)
+        if missing:
+            raise serializers.ValidationError(f"Вопросы с ID {missing} не найдены или не принадлежат вам")
+        
+        return value
+    
+    def create(self, validated_data):
+        question_ids = validated_data.pop('question_ids')
+        test = Test.objects.create(**validated_data)
+        test.questions.set(question_ids)
+        return test
+
+
+class TestListSerializer(serializers.ModelSerializer):
+    teacher_name = serializers.CharField(source='teacher.get_full_name', read_only=True)
+    question_count = serializers.IntegerField(source='questions.count', read_only=True)
+    
+    class Meta:
+        model = Test
+        fields = ['id', 'title', 'teacher_name', 'question_count', 'created_at', 'is_active']
+
+
+class AnswerSerializer(serializers.ModelSerializer):
+    question = QuestionListSerializer(read_only=True)
+    
+    class Meta:
+        model = Answer
+        fields = ['id', 'question', 'selected_option', 'is_correct', 'answered_at']
+
+
+class AttemptSerializer(serializers.ModelSerializer):
+    test = TestListSerializer(read_only=True)
+    answers = AnswerSerializer(many=True, read_only=True)
+    total_questions = serializers.IntegerField(source='total_questions', read_only=True)
+    answered_count = serializers.IntegerField(source='answered_count', read_only=True)
+    
+    class Meta:
+        model = Attempt
+        fields = [
+            'id', 'test', 'status', 'score', 'started_at', 
+            'completed_at', 'current_question_index', 
+            'total_questions', 'answered_count', 'answers'
+        ]
+
+
+class AttemptListSerializer(serializers.ModelSerializer):
+    test_title = serializers.CharField(source='test.title', read_only=True)
+    student_name = serializers.CharField(source='student.get_full_name', read_only=True)
+    
+    class Meta:
+        model = Attempt
+        fields = ['id', 'test_title', 'student_name', 'status', 'score', 'started_at', 'completed_at']
+
+
+class SubmitAnswerSerializer(serializers.Serializer):
+    question_id = serializers.IntegerField()
+    selected_option = serializers.ChoiceField(choices=[('A', 'A'), ('B', 'B'), ('C', 'C')])
+    
+    def validate_question_id(self, value):
+        try:
+            Question.objects.get(id=value)
+        except Question.DoesNotExist:
+            raise serializers.ValidationError("Вопрос не найден")
+        return value
+
+
+class StudentResultSerializer(serializers.ModelSerializer):
+    student_name = serializers.CharField(source='student.get_full_name', read_only=True)
+    student_username = serializers.CharField(source='student.username', read_only=True)
+    test_title = serializers.CharField(source='test.title', read_only=True)
+    
+    class Meta:
+        model = Attempt
+        fields = ['id', 'student_name', 'student_username', 'test_title', 'score', 'completed_at']

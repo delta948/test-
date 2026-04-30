@@ -1,0 +1,65 @@
+import React from 'react';
+import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
+import { AuthProvider } from './context/AuthContext';
+import PrivateRoute from './components/PrivateRoute';
+import Login from './components/Login';
+import Register from './components/Register';
+import TeacherDashboard from './components/TeacherDashboard';
+import StudentDashboard from './components/StudentDashboard';
+import TestPage from './components/TestPage';
+import TestResult from './components/TestResult';
+import Navbar from './components/Navbar';
+import './App.css';
+
+function App() {
+  return (
+    <AuthProvider>
+      <Router>
+        <div className="App min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
+          <Navbar />
+          <div className="container mx-auto px-4 py-8 max-w-7xl">
+            <Routes>
+              <Route path="/login" element={<Login />} />
+              <Route path="/register" element={<Register />} />
+              <Route 
+                path="/teacher/dashboard" 
+                element={
+                  <PrivateRoute allowedRoles={['teacher']}>
+                    <TeacherDashboard />
+                  </PrivateRoute>
+                } 
+              />
+              <Route 
+                path="/student/dashboard" 
+                element={
+                  <PrivateRoute allowedRoles={['student']}>
+                    <StudentDashboard />
+                  </PrivateRoute>
+                } 
+              />
+              <Route 
+                path="/test/:attemptId" 
+                element={
+                  <PrivateRoute allowedRoles={['student']}>
+                    <TestPage />
+                  </PrivateRoute>
+                } 
+              />
+              <Route 
+                path="/result/:attemptId" 
+                element={
+                  <PrivateRoute allowedRoles={['student']}>
+                    <TestResult />
+                  </PrivateRoute>
+                } 
+              />
+              <Route path="/" element={<Navigate to="/login" replace />} />
+            </Routes>
+          </div>
+        </div>
+      </Router>
+    </AuthProvider>
+  );
+}
+
+export default App;
