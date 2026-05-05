@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 
 const API_URL = 'http://localhost:8000/api';
@@ -8,7 +9,8 @@ const TeacherDashboard = () => {
   const [tests, setTests] = useState([]);
   const [results, setResults] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState('tests');
+  const [activeTab, setActiveTab] = useState('results');
+  const navigate = useNavigate();
   
   const [newQuestion, setNewQuestion] = useState({
     text: '',
@@ -58,21 +60,17 @@ const TeacherDashboard = () => {
         correct_answer: 'A'
       });
       fetchData();
-      alert('Вопрос создан успешно!');
     } catch (error) {
-      alert('Ошибка при создании вопроса');
+      console.error('Error creating question:', error);
     }
   };
 
   const handleDeleteQuestion = async (id) => {
-    if (!window.confirm('Удалить этот вопрос?')) return;
-    
     try {
       await axios.delete(`${API_URL}/questions/${id}/`);
       fetchData();
-      alert('Вопрос удален!');
     } catch (error) {
-      alert('Ошибка при удалении вопроса');
+      console.error('Error deleting question:', error);
     }
   };
 
@@ -80,7 +78,7 @@ const TeacherDashboard = () => {
     e.preventDefault();
     
     if (selectedQuestions.length !== 100) {
-      alert(`Необходимо выбрать ровно 100 вопросов. Выбрано: ${selectedQuestions.length}`);
+      console.error(`Необходимо выбрать ровно 100 вопросов. Выбрано: ${selectedQuestions.length}`);
       return;
     }
     
@@ -94,9 +92,8 @@ const TeacherDashboard = () => {
       setSelectedQuestions([]);
       setShowCreateTest(false);
       fetchData();
-      alert('Тест создан успешно с 100 вопросами!');
     } catch (error) {
-      alert('Ошибка при создании теста: ' + (error.response?.data?.question_ids?.[0] || ''));
+      console.error('Error creating test:', error);
     }
   };
 
@@ -106,8 +103,6 @@ const TeacherDashboard = () => {
     } else {
       if (selectedQuestions.length < 100) {
         setSelectedQuestions([...selectedQuestions, id]);
-      } else {
-        alert('Можно выбрать максимум 100 вопросов');
       }
     }
   };
@@ -120,8 +115,6 @@ const TeacherDashboard = () => {
   const selectAll = () => {
     if (questions.length >= 100) {
       setSelectedQuestions(questions.slice(0, 100).map(q => q.id));
-    } else {
-      alert(`Недостаточно вопросов. Есть только ${questions.length} вопросов.`);
     }
   };
 
@@ -145,28 +138,6 @@ const TeacherDashboard = () => {
       </div>
       
       <div className="flex gap-2 mb-6 p-1 bg-gray-100 rounded-xl">
-        <button 
-          className={`px-6 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${activeTab === 'tests' ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
-          onClick={() => setActiveTab('tests')}
-        >
-          <span className="flex items-center gap-2">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" />
-            </svg>
-            Тесты
-          </span>
-        </button>
-        <button 
-          className={`px-6 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${activeTab === 'questions' ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
-          onClick={() => setActiveTab('questions')}
-        >
-          <span className="flex items-center gap-2">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.228 9c.549-1.165 2.03-2 3.772-2 2.21 0 4 1.343 4 3 0 1.4-1.278 2.575-3.006 2.907-.542.104-.994.54-.994 1.093m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
-            Вопросы ({questions.length})
-          </span>
-        </button>
         <button 
           className={`px-6 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${activeTab === 'results' ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
           onClick={() => setActiveTab('results')}
@@ -379,35 +350,72 @@ const TeacherDashboard = () => {
 
       {activeTab === 'results' && (
         <div>
-          <h4>Результаты учеников</h4>
+          <h4 className="text-xl font-semibold text-gray-900 mb-4">Результаты учеников</h4>
           {results.length === 0 ? (
-            <div className="empty-state">
-              <p>Нет результатов</p>
+            <div className="text-center py-16 bg-white rounded-2xl border border-gray-200">
+              <p className="text-gray-900 font-medium text-lg">Нет результатов</p>
+              <p className="text-sm text-gray-500 mt-2">Ученики ещё не прошли тесты</p>
             </div>
           ) : (
-            <div className="table-responsive">
-              <table className="table table-striped">
-                <thead>
+            <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+              <table className="w-full">
+                <thead className="bg-gray-50">
                   <tr>
-                    <th>Ученик</th>
-                    <th>Тест</th>
-                    <th>Результат</th>
-                    <th>Дата</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ученик</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Тест</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Результат</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Процент</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Оценка</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Дата</th>
                   </tr>
                 </thead>
-                <tbody>
-                  {results.map(result => (
-                    <tr key={result.id}>
-                      <td>{result.student_name} ({result.student_username})</td>
-                      <td>{result.test_title}</td>
-                      <td>
-                        <span className={`badge ${result.score >= 70 ? 'bg-success' : result.score >= 50 ? 'bg-warning' : 'bg-danger'}`}>
-                          {result.score} / 100
-                        </span>
-                      </td>
-                      <td>{result.completed_at ? new Date(result.completed_at).toLocaleString() : '-'}</td>
-                    </tr>
-                  ))}
+                <tbody className="divide-y divide-gray-200">
+                  {results.map(result => {
+                    const percentage = result.total_questions > 0 
+                      ? Math.round((result.score / result.total_questions) * 100) 
+                      : 0;
+                    let grade = 'Неудовлетворительно';
+                    let gradeColor = 'text-red-600 bg-red-50';
+                    if (percentage >= 90) {
+                      grade = 'Отлично';
+                      gradeColor = 'text-green-600 bg-green-50';
+                    } else if (percentage >= 70) {
+                      grade = 'Хорошо';
+                      gradeColor = 'text-blue-600 bg-blue-50';
+                    } else if (percentage >= 50) {
+                      grade = 'Удовлетворительно';
+                      gradeColor = 'text-yellow-600 bg-yellow-50';
+                    }
+                    return (
+                      <tr key={result.id} className="hover:bg-gray-50">
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <div className="text-sm font-medium text-gray-900">{result.student_name}</div>
+                          <div className="text-sm text-gray-500">@{result.student_username}</div>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {result.test_title}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                            percentage >= 70 ? 'bg-green-100 text-green-800' : percentage >= 50 ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'
+                          }`}>
+                            {result.score} / {result.total_questions}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                          {percentage}%
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap">
+                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${gradeColor}`}>
+                            {grade}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                          {result.completed_at ? new Date(result.completed_at).toLocaleString('ru-RU') : '-'}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>

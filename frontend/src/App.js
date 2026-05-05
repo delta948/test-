@@ -8,6 +8,7 @@ import TeacherDashboard from './components/TeacherDashboard';
 import StudentDashboard from './components/StudentDashboard';
 import TestPage from './components/TestPage';
 import TestResult from './components/TestResult';
+import TestResultsPage from './components/TestResultsPage';
 import Navbar from './components/Navbar';
 import './App.css';
 
@@ -50,6 +51,14 @@ function App() {
                 element={
                   <PrivateRoute allowedRoles={['student']}>
                     <TestResult />
+                  </PrivateRoute>
+                } 
+              />
+              <Route 
+                path="/test-results/:id" 
+                element={
+                  <PrivateRoute allowedRoles={['student']}>
+                    <TestResultsPage />
                   </PrivateRoute>
                 } 
               />

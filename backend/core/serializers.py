@@ -118,14 +118,14 @@ class AnswerSerializer(serializers.ModelSerializer):
 class AttemptSerializer(serializers.ModelSerializer):
     test = TestListSerializer(read_only=True)
     answers = AnswerSerializer(many=True, read_only=True)
-    total_questions = serializers.IntegerField(source='total_questions', read_only=True)
-    answered_count = serializers.IntegerField(source='answered_count', read_only=True)
-    
+    total_questions = serializers.IntegerField(read_only=True)
+    answered_count = serializers.IntegerField(read_only=True)
+
     class Meta:
         model = Attempt
         fields = [
-            'id', 'test', 'status', 'score', 'started_at', 
-            'completed_at', 'current_question_index', 
+            'id', 'test', 'status', 'score', 'started_at',
+            'completed_at', 'current_question_index',
             'total_questions', 'answered_count', 'answers'
         ]
 
