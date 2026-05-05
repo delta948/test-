@@ -116,12 +116,20 @@ class AvailableTestsView(generics.ListAPIView):
     permission_classes = [IsStudent]
     
     def get_queryset(self):
-        completed_test_ids = Attempt.objects.filter(
-            student=self.request.user,
-            status='completed'
-        ).values_list('test_id', flat=True)
+        from django.db.models import Count, Q
         
-        return Test.objects.filter(is_active=True).exclude(id__in=completed_test_ids)
+        # Получаем тесты с количеством завершенных попыток ученика
+        tests_with_attempts = Test.objects.filter(
+            is_active=True
+        ).annotate(
+            completed_attempts=Count(
+                'attempts',
+                filter=Q(attempts__student=self.request.user, attempts__status='completed')
+            )
+        )
+        
+        # Возвращаем только тесты с менее чем 3 попытками
+        return tests_with_attempts.filter(completed_attempts__lt=3)
 
 
 class StartAttemptView(APIView):
@@ -133,15 +141,19 @@ class StartAttemptView(APIView):
         except Test.DoesNotExist:
             return Response({'error': 'Тест не найден или не активен'}, status=status.HTTP_404_NOT_FOUND)
         
-        existing_completed = Attempt.objects.filter(
+        # Проверка количества завершенных попыток (максимум 3)
+        completed_attempts = Attempt.objects.filter(
             student=request.user,
             test=test,
             status='completed'
-        ).first()
+        ).count()
         
-        if existing_completed:
-            return Response({'error': 'Вы уже прошли этот тест'}, status=status.HTTP_400_BAD_REQUEST)
+        if completed_attempts >= 3:
+            return Response({
+                'error': 'Вы исчерпали все попытки (3 из 3). Тест больше недоступен.'
+            }, status=status.HTTP_400_BAD_REQUEST)
         
+        # Проверка на существующую активную попытку
         existing_attempt = Attempt.objects.filter(
             student=request.user,
             test=test,
@@ -152,7 +164,9 @@ class StartAttemptView(APIView):
             serializer = AttemptSerializer(existing_attempt)
             return Response({
                 'message': 'Продолжение существующей попытки',
-                'attempt': serializer.data
+                'attempt': serializer.data,
+                'attempts_used': completed_attempts,
+                'attempts_left': 3 - completed_attempts
             })
         
         if test.questions.count() < 1:
@@ -168,7 +182,9 @@ class StartAttemptView(APIView):
         serializer = AttemptSerializer(attempt)
         return Response({
             'message': 'Попытка начата',
-            'attempt': serializer.data
+            'attempt': serializer.data,
+            'attempt_number': completed_attempts + 1,
+            'attempts_left': 2 - completed_attempts
         }, status=status.HTTP_201_CREATED)
 
 

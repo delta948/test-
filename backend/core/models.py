@@ -96,7 +96,6 @@ class Attempt(models.Model):
     
     class Meta:
         ordering = ['-started_at']
-        unique_together = ['student', 'test', 'status']
     
     def __str__(self):
         return f"Попытка {self.student.username} - {self.test.title}"
@@ -106,6 +105,21 @@ class Attempt(models.Model):
     
     def answered_count(self):
         return self.answers.count()
+    
+    @staticmethod
+    def get_attempt_count(student, test):
+        """Количество завершенных попыток для ученика по тесту"""
+        return Attempt.objects.filter(
+            student=student,
+            test=test,
+            status='completed'
+        ).count()
+    
+    @staticmethod
+    def can_start_attempt(student, test):
+        """Проверка, может ли ученик начать новую попытку (макс 3)"""
+        completed_count = Attempt.get_attempt_count(student, test)
+        return completed_count < 3
 
 
 class Answer(models.Model):
