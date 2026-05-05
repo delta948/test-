@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate, Link } from 'react-router-dom';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
 const Login = () => {
@@ -46,7 +46,7 @@ const Login = () => {
       <div className="w-full max-w-md animate-fade-in">
         <div className="glass-card rounded-2xl p-8">
           <div className="text-center mb-8">
-            <div className="w-16 h-16 bg-gradient-to-br from-primary-500 to-purple-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
+            <div className="w-16 h-16 bg-gradient-to-br from-green-500 to-green-600 rounded-2xl flex items-center justify-center mx-auto mb-4 shadow-lg">
               <svg className="w-8 h-8 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
@@ -94,7 +94,7 @@ const Login = () => {
             
             <button 
               type="submit" 
-              className="w-full py-4 px-6 bg-gradient-to-r from-primary-600 to-purple-600 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed"
+              className="w-full py-4 px-6 bg-gradient-to-r from-green-600 to-green-500 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed"
               disabled={loading}
             >
               {loading ? (
@@ -107,23 +107,6 @@ const Login = () => {
               )}
             </button>
           </form>
-          
-          <div className="mt-6 text-center">
-            <p className="text-gray-600">
-              Нет аккаунта?{' '}
-              <Link to="/register" className="text-primary-600 font-semibold hover:text-primary-700 transition-colors">
-                Зарегистрироваться
-              </Link>
-            </p>
-          </div>
-          
-          <div className="mt-8 p-4 bg-gradient-to-r from-gray-50 to-gray-100 rounded-xl border border-gray-200">
-            <p className="text-xs text-gray-500 text-center">
-              <span className="font-semibold text-gray-700">Демо-данные:</span><br/>
-              Учитель: <span className="font-medium">admin / admin</span><br/>
-              Ученик: <span className="font-medium">student1 / 123</span> (до student50)
-            </p>
-          </div>
         </div>
       </div>
     </div>

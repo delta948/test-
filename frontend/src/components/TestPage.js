@@ -17,6 +17,8 @@ const TestPage = () => {
   const [testInfo, setTestInfo] = useState(null);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
+  const [completing, setCompleting] = useState(false);
+  const [completionError, setCompletionError] = useState('');
 
   useEffect(() => {
     fetchTestData();
@@ -87,11 +89,12 @@ const TestPage = () => {
     const currentQuestion = questions[currentIndex];
     
     if (answeredQuestions.includes(currentQuestion.id)) {
-      alert('Вы уже ответили на этот вопрос');
+      setError('Вы уже ответили на этот вопрос');
       return;
     }
     
     setSaving(true);
+    setError('');
     
     try {
       const response = await axios.post(`${API_URL}/student/attempts/${attemptId}/answer/`, {
@@ -114,23 +117,27 @@ const TestPage = () => {
       
     } catch (error) {
       const errorMsg = error.response?.data?.error || 'Ошибка при сохранении ответа';
-      alert(errorMsg);
+      setError(errorMsg);
     } finally {
       setSaving(false);
     }
   };
 
   const completeTest = async () => {
+    setCompleting(true);
+    setCompletionError('');
+    
     try {
       const response = await axios.post(`${API_URL}/student/attempts/${attemptId}/complete/`);
       
       localStorage.removeItem(`test_progress_${attemptId}`);
       
-      alert(`Тест завершен! Ваш результат: ${response.data.correct_answers} / ${response.data.total_questions}`);
-      navigate(`/result/${attemptId}`);
+      navigate(`/test-results/${attemptId}`);
     } catch (error) {
-      const errorMsg = error.response?.data?.error || 'Ошибка при завершении теста';
-      alert(errorMsg);
+      const errorMsg = error.response?.data?.error || error.response?.data?.detail || 'Ошибка при завершении теста';
+      setCompletionError(errorMsg);
+    } finally {
+      setCompleting(false);
     }
   };
 
@@ -154,11 +161,11 @@ const TestPage = () => {
   };
 
   const handleCompleteClick = () => {
+    setCompletionError('');
     if (answeredQuestions.length < questions.length) {
       const unansweredCount = questions.length - answeredQuestions.length;
-      if (!window.confirm(`Вы ответили не на все вопросы (${unansweredCount} без ответа). Завершить тест?`)) {
-        return;
-      }
+      setCompletionError(`Вы ответили не на все вопросы (${unansweredCount} без ответа). Ответьте на все вопросы перед завершением.`);
+      return;
     }
     completeTest();
   };
@@ -193,6 +200,12 @@ const TestPage = () => {
 
   return (
     <div className="test-container max-w-5xl mx-auto animate-fade-in pb-8">
+      {completionError && (
+        <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-xl">
+          <p className="text-red-700">{completionError}</p>
+        </div>
+      )}
+
       <div className="progress-container">
         <div className="flex justify-between items-center mb-3">
           <span className="text-lg font-semibold text-gray-800">
@@ -318,10 +331,11 @@ const TestPage = () => {
                 </button>
               ) : (
                 <button
-                  className="px-8 py-3 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-300"
+                  className="px-8 py-3 bg-gradient-to-r from-green-500 to-emerald-600 hover:from-green-600 hover:to-emerald-700 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 disabled:opacity-50 disabled:cursor-not-allowed"
                   onClick={handleCompleteClick}
+                  disabled={completing}
                 >
-                  Завершить тест
+                  {completing ? 'Завершение...' : 'Завершить тест'}
                 </button>
               )}
             </div>
@@ -357,13 +371,14 @@ const TestPage = () => {
 
       <div className="text-center mt-6">
         <button 
-          className="px-6 py-3 bg-amber-100 hover:bg-amber-200 text-amber-700 font-medium rounded-xl transition-all duration-200 flex items-center gap-2 mx-auto"
+          className="px-6 py-3 bg-amber-100 hover:bg-amber-200 text-amber-700 font-medium rounded-xl transition-all duration-200 flex items-center gap-2 mx-auto disabled:opacity-50 disabled:cursor-not-allowed"
           onClick={handleCompleteClick}
+          disabled={completing}
         >
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
           </svg>
-          Завершить тест досрочно
+          {completing ? 'Завершение...' : 'Завершить тест досрочно'}
         </button>
       </div>
     </div>
