@@ -11,6 +11,7 @@ const TeacherDashboard = () => {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('results');
   const navigate = useNavigate();
+  const [isMainTeacher, setIsMainTeacher] = useState(false);
   
   const [newQuestion, setNewQuestion] = useState({
     text: '',
@@ -25,6 +26,14 @@ const TeacherDashboard = () => {
   });
   const [selectedQuestions, setSelectedQuestions] = useState([]);
   const [showCreateTest, setShowCreateTest] = useState(false);
+  
+  const [newTeacher, setNewTeacher] = useState({
+    username: '',
+    first_name: '',
+    last_name: '',
+    password: ''
+  });
+  const [showCreateTeacher, setShowCreateTeacher] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -41,6 +50,10 @@ const TeacherDashboard = () => {
       setQuestions(questionsRes.data);
       setTests(testsRes.data);
       setResults(resultsRes.data);
+      
+      // Проверяем, является ли пользователь главным учителем
+      const user = JSON.parse(localStorage.getItem('user') || '{}');
+      setIsMainTeacher(user.is_main_teacher || false);
     } catch (error) {
       console.error('Error fetching data:', error);
     } finally {
@@ -97,6 +110,28 @@ const TeacherDashboard = () => {
     }
   };
 
+  const handleCreateTeacher = async (e) => {
+    e.preventDefault();
+    try {
+      const token = localStorage.getItem('token');
+      await axios.post(`${API_URL}/teacher/create-teacher/`, newTeacher, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      
+      setNewTeacher({
+        username: '',
+        first_name: '',
+        last_name: '',
+        password: ''
+      });
+      setShowCreateTeacher(false);
+      alert('Учитель успешно создан');
+    } catch (error) {
+      console.error('Error creating teacher:', error);
+      alert('Ошибка создания учителя');
+    }
+  };
+
   const toggleQuestionSelection = (id) => {
     if (selectedQuestions.includes(id)) {
       setSelectedQuestions(selectedQuestions.filter(q => q !== id));
@@ -139,7 +174,7 @@ const TeacherDashboard = () => {
       
       <div className="flex gap-2 mb-6 p-1 bg-gray-100 rounded-xl">
         <button 
-          className={`px-6 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${activeTab === 'results' ? 'bg-white text-primary-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+          className={`px-6 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${activeTab === 'results' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
           onClick={() => setActiveTab('results')}
         >
           <span className="flex items-center gap-2">
@@ -149,6 +184,19 @@ const TeacherDashboard = () => {
             Результаты
           </span>
         </button>
+        {isMainTeacher && (
+          <button 
+            className={`px-6 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${activeTab === 'teachers' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
+            onClick={() => setActiveTab('teachers')}
+          >
+            <span className="flex items-center gap-2">
+              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+              </svg>
+              Учителя
+            </span>
+          </button>
+        )}
       </div>
 
       {activeTab === 'tests' && (
@@ -418,6 +466,74 @@ const TeacherDashboard = () => {
                   })}
                 </tbody>
               </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {activeTab === 'teachers' && isMainTeacher && (
+        <div>
+          <div className="mb-4">
+            <button 
+              className="px-6 py-3 bg-gradient-to-r from-green-600 to-green-500 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200"
+              onClick={() => setShowCreateTeacher(!showCreateTeacher)}
+            >
+              {showCreateTeacher ? 'Отмена' : 'Создать учителя'}
+            </button>
+          </div>
+          
+          {showCreateTeacher && (
+            <div className="glass-card rounded-2xl p-6 mb-6">
+              <h4 className="text-xl font-semibold text-gray-900 mb-4">Создать нового учителя</h4>
+              <form onSubmit={handleCreateTeacher} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Логин</label>
+                  <input
+                    type="text"
+                    className="input-modern"
+                    value={newTeacher.username}
+                    onChange={(e) => setNewTeacher({...newTeacher, username: e.target.value})}
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Имя</label>
+                  <input
+                    type="text"
+                    className="input-modern"
+                    value={newTeacher.first_name}
+                    onChange={(e) => setNewTeacher({...newTeacher, first_name: e.target.value})}
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Фамилия</label>
+                  <input
+                    type="text"
+                    className="input-modern"
+                    value={newTeacher.last_name}
+                    onChange={(e) => setNewTeacher({...newTeacher, last_name: e.target.value})}
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">Пароль</label>
+                  <input
+                    type="password"
+                    className="input-modern"
+                    value={newTeacher.password}
+                    onChange={(e) => setNewTeacher({...newTeacher, password: e.target.value})}
+                    required
+                    minLength="6"
+                  />
+                </div>
+                <button 
+                  type="submit"
+                  className="px-6 py-3 bg-gradient-to-r from-green-600 to-green-500 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200"
+                >
+                  Создать учителя
+                </button>
+              </form>
             </div>
           )}
         </div>

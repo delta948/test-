@@ -9,6 +9,7 @@ class User(AbstractUser):
         ('student', 'Ученик'),
     ]
     role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='student')
+    is_main_teacher = models.BooleanField(default=False, verbose_name='Главный учитель')
     
     groups = models.ManyToManyField(
         'auth.Group',
