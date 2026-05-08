@@ -25,15 +25,6 @@ const StudentDashboard = () => {
     return shuffled;
   };
 
-  const shuffleOptions = (question) => {
-    const options = [
-      { key: 'A', text: question.option_a, correct: question.correct_answer === 'A' },
-      { key: 'B', text: question.option_b, correct: question.correct_answer === 'B' },
-      { key: 'C', text: question.option_c, correct: question.correct_answer === 'C' }
-    ];
-    return shuffleArray(options);
-  };
-
   const fetchQuestions = async () => {
     try {
       const token = localStorage.getItem('token');
@@ -58,11 +49,7 @@ const StudentDashboard = () => {
             setQuestions(generateMockQuestions());
           } else {
             const shuffledQuestions = shuffleArray(questionsRes.data);
-            const questionsWithShuffledOptions = shuffledQuestions.map(q => ({
-              ...q,
-              shuffledOptions: shuffleOptions(q)
-            }));
-            setQuestions(questionsWithShuffledOptions);
+            setQuestions(shuffledQuestions);
           }
         }
       }
@@ -241,7 +228,11 @@ const StudentDashboard = () => {
                   <div className="flex-1">
                     <h3 className="font-semibold text-gray-900 mb-4">{q.text}</h3>
                     <div className="space-y-2">
-                      {q.shuffledOptions.map((opt) => {
+                      {[
+                        { key: 'A', text: q.option_a },
+                        { key: 'B', text: q.option_b },
+                        { key: 'C', text: q.option_c }
+                      ].map((opt) => {
                         const isSelected = answers[q.id] === opt.key;
                         return (
                           <div

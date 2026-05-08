@@ -8,7 +8,7 @@ from django.utils import timezone
 from django.conf import settings
 from .models import Question, Test, Attempt, Answer, StudentProfile
 from .serializers import (
-    UserSerializer, RegisterSerializer, QuestionSerializer, QuestionListSerializer,
+    UserSerializer, RegisterSerializer, CreateTeacherSerializer, QuestionSerializer, QuestionListSerializer,
     TestSerializer, TestCreateSerializer, TestListSerializer, AttemptSerializer,
     AttemptListSerializer, SubmitAnswerSerializer, StudentResultSerializer
 )
@@ -371,3 +371,31 @@ class StudentCountView(APIView):
             'max_students': settings.MAX_STUDENTS,
             'available_slots': max(0, settings.MAX_STUDENTS - count)
         })
+
+
+class CreateTeacherView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    
+    def post(self, request):
+        # Проверка: только главный учитель может создавать учителей
+        if not (request.user.role == 'teacher' and request.user.is_main_teacher):
+            return Response(
+                {'error': 'Только главный учитель может создавать аккаунты учителей'}, 
+                status=status.HTTP_403_FORBIDDEN
+            )
+        
+        serializer = CreateTeacherSerializer(data=request.data)
+        if not serializer.is_valid():
+            return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+        
+        try:
+            serializer.save()
+            return Response({
+                'message': 'Учитель успешно создан',
+                'user': UserSerializer(serializer.instance).data
+            }, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            return Response(
+                {'error': f'Ошибка создания учителя: {str(e)}'}, 
+                status=status.HTTP_400_BAD_REQUEST
+            )
