@@ -1,6 +1,7 @@
 from rest_framework import serializers
 from django.contrib.auth import get_user_model
 from django.db import transaction
+import random
 from .models import Question, Test, Attempt, Answer, StudentProfile
 
 User = get_user_model()
@@ -9,7 +10,11 @@ User = get_user_model()
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'last_name', 'role', 'is_main_teacher']
+        fields = [
+            'id', 'username', 'email', 'first_name', 'last_name', 'role',
+            'is_main_teacher', 'is_staff', 'is_superuser'
+        ]
+        read_only_fields = ['is_staff', 'is_superuser']
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -69,9 +74,29 @@ class QuestionSerializer(serializers.ModelSerializer):
 
 
 class QuestionListSerializer(serializers.ModelSerializer):
+    answers = serializers.SerializerMethodField()
+
     class Meta:
         model = Question
-        fields = ['id', 'text', 'option_a', 'option_b', 'option_c']
+        fields = ['id', 'text', 'answers']
+
+    def get_answers(self, obj):
+        # Создаем варианты с оригинальными ключами
+        options = [
+            {'original_key': 'A', 'text': obj.option_a},
+            {'original_key': 'B', 'text': obj.option_b},
+            {'original_key': 'C', 'text': obj.option_c},
+        ]
+        # Перемешиваем варианты
+        random.shuffle(options)
+        
+        # Возвращаем с фиксированными ключами для отображения (A, B, C)
+        # но с оригинальными ключами для отправки на бэкенд
+        return [
+            {'key': 'A', 'text': options[0]['text'], 'original_key': options[0]['original_key']},
+            {'key': 'B', 'text': options[1]['text'], 'original_key': options[1]['original_key']},
+            {'key': 'C', 'text': options[2]['text'], 'original_key': options[2]['original_key']},
+        ]
 
 
 class TestSerializer(serializers.ModelSerializer):
@@ -120,10 +145,19 @@ class TestCreateSerializer(serializers.ModelSerializer):
 class TestListSerializer(serializers.ModelSerializer):
     teacher_name = serializers.CharField(source='teacher.get_full_name', read_only=True)
     question_count = serializers.IntegerField(source='questions.count', read_only=True)
+    completed_attempts = serializers.IntegerField(read_only=True, default=0)
+    attempts_left = serializers.SerializerMethodField()
     
     class Meta:
         model = Test
-        fields = ['id', 'title', 'teacher_name', 'question_count', 'created_at', 'is_active']
+        fields = [
+            'id', 'title', 'teacher_name', 'question_count', 'created_at',
+            'is_active', 'completed_attempts', 'attempts_left'
+        ]
+
+    def get_attempts_left(self, obj):
+        completed_attempts = getattr(obj, 'completed_attempts', 0) or 0
+        return max(0, 1 - completed_attempts)
 
 
 class AnswerSerializer(serializers.ModelSerializer):
@@ -174,7 +208,11 @@ class StudentResultSerializer(serializers.ModelSerializer):
     student_name = serializers.CharField(source='student.get_full_name', read_only=True)
     student_username = serializers.CharField(source='student.username', read_only=True)
     test_title = serializers.CharField(source='test.title', read_only=True)
+    total_questions = serializers.IntegerField(read_only=True)
     
     class Meta:
         model = Attempt
-        fields = ['id', 'student_name', 'student_username', 'test_title', 'score', 'completed_at']
+        fields = [
+            'id', 'student_name', 'student_username', 'test_title',
+            'score', 'total_questions', 'completed_at'
+        ]
