@@ -5,13 +5,13 @@ from .models import User, StudentProfile, Question, Test, Attempt, Answer
 
 @admin.register(User)
 class CustomUserAdmin(UserAdmin):
-    list_display = ['username', 'email', 'role', 'first_name', 'last_name', 'is_staff']
-    list_filter = ['role', 'is_staff', 'is_active']
+    list_display = ['username', 'email', 'role', 'is_main_teacher', 'first_name', 'last_name', 'is_staff']
+    list_filter = ['role', 'is_main_teacher', 'is_staff', 'is_active']
     fieldsets = UserAdmin.fieldsets + (
-        ('Роль', {'fields': ('role',)}),
+        ('Роль', {'fields': ('role', 'is_main_teacher')}),
     )
     add_fieldsets = UserAdmin.add_fieldsets + (
-        ('Роль', {'fields': ('role',)}),
+        ('Роль', {'fields': ('role', 'is_main_teacher')}),
     )
 
 

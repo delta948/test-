@@ -1,6 +1,8 @@
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 from django.conf import settings
+from django.utils import timezone
+from datetime import timedelta
 
 
 class User(AbstractUser):
@@ -89,6 +91,8 @@ class Attempt(models.Model):
     
     student = models.ForeignKey(User, on_delete=models.CASCADE, related_name='attempts')
     test = models.ForeignKey(Test, on_delete=models.CASCADE, related_name='attempts')
+    questions = models.ManyToManyField(Question, related_name='attempts', blank=True)
+    question_order = models.JSONField(default=list, blank=True)
     status = models.CharField(max_length=15, choices=STATUS_CHOICES, default='in_progress')
     score = models.PositiveIntegerField(default=0, verbose_name='Результат')
     started_at = models.DateTimeField(auto_now_add=True)
@@ -102,6 +106,8 @@ class Attempt(models.Model):
         return f"Попытка {self.student.username} - {self.test.title}"
     
     def total_questions(self):
+        if self.questions.exists():
+            return self.questions.count()
         return self.test.questions.count()
     
     def answered_count(self):
@@ -109,18 +115,20 @@ class Attempt(models.Model):
     
     @staticmethod
     def get_attempt_count(student, test):
-        """Количество завершенных попыток для ученика по тесту"""
+        """Количество завершенных попыток за последние 10 минут"""
+        ten_minutes_ago = timezone.now() - timedelta(minutes=10)
         return Attempt.objects.filter(
             student=student,
             test=test,
-            status='completed'
+            status='completed',
+            completed_at__gte=ten_minutes_ago
         ).count()
     
     @staticmethod
     def can_start_attempt(student, test):
-        """Проверка, может ли ученик начать новую попытку (макс 3)"""
+        """Проверка, может ли ученик начать новую попытку"""
         completed_count = Attempt.get_attempt_count(student, test)
-        return completed_count < 3
+        return completed_count < 1
 
 
 class Answer(models.Model):
