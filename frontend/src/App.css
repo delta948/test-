@@ -71,6 +71,17 @@
   margin: 0 auto;
 }
 
+.protected-test-content,
+.protected-test-content *,
+body.test-protection-active,
+body.test-protection-active * {
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  -webkit-touch-callout: none;
+}
+
 /* Question Card */
 .question-card {
   background: rgba(255, 255, 255, 0.9);

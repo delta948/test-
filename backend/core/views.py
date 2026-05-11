@@ -19,7 +19,7 @@ from .serializers import (
 User = get_user_model()
 MAX_TEST_ATTEMPTS = 1
 QUESTIONS_PER_ATTEMPT = 100
-TEST_DURATION = timedelta(minutes=1)
+TEST_DURATION = timedelta(hours=1)
 COMPLETED_ATTEMPT_RETENTION = timedelta(days=45)
 
 
@@ -538,10 +538,21 @@ class TeacherAttemptResultView(APIView):
         if not attempt:
             return Response({'error': 'Результат не найден'}, status=status.HTTP_404_NOT_FOUND)
 
+        question_ids = attempt.question_order or list(attempt.questions.values_list('id', flat=True))
+        if question_ids:
+            preserved_order = Case(
+                *[When(id=question_id, then=position) for position, question_id in enumerate(question_ids)],
+                output_field=IntegerField()
+            )
+            questions = attempt.questions.filter(id__in=question_ids).order_by(preserved_order)
+        else:
+            questions = attempt.test.questions.all()
+
         serializer = AttemptSerializer(attempt)
         return Response({
             'attempt': serializer.data,
             'student': UserSerializer(attempt.student).data,
+            'questions': QuestionSerializer(questions, many=True).data,
             'correct_count': attempt.score,
             'total_questions': attempt.total_questions(),
             'answered_count': attempt.answers.count(),
