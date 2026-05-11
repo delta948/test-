@@ -69,9 +69,34 @@ class IsTeacher(permissions.BasePermission):
         )
 
 
+class TeacherListView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        if not can_manage_teachers(request.user):
+            return Response(
+                {'error': 'Нет доступа к списку учителей'},
+                status=status.HTTP_403_FORBIDDEN
+            )
+
+        teachers = User.objects.filter(role='teacher').order_by('last_name', 'first_name', 'username')
+        return Response({'teachers': UserSerializer(teachers, many=True).data})
+
+
 class IsStudent(permissions.BasePermission):
     def has_permission(self, request, view):
         return request.user.is_authenticated and request.user.is_student()
+
+
+def can_manage_teachers(user):
+    return (
+        user.is_authenticated and (
+            user.is_staff or
+            user.is_superuser or
+            getattr(user, 'role', None) == 'admin' or
+            (getattr(user, 'role', None) == 'teacher' and getattr(user, 'is_main_teacher', False))
+        )
+    )
 
 
 class RegisterView(generics.CreateAPIView):
@@ -577,12 +602,7 @@ class CreateTeacherView(APIView):
     
     def post(self, request):
         # Проверка: только главный учитель может создавать учителей
-        if not (
-            request.user.is_staff or
-            request.user.is_superuser or
-            getattr(request.user, 'role', None) == 'admin' or
-            (request.user.role == 'teacher' and request.user.is_main_teacher)
-        ):
+        if not can_manage_teachers(request.user):
             return Response(
                 {'error': 'Только администратор или главный учитель может создавать аккаунты учителей'}, 
                 status=status.HTTP_403_FORBIDDEN

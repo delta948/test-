@@ -25,7 +25,7 @@ function App() {
               <Route 
                 path="/teacher/dashboard" 
                 element={
-                  <PrivateRoute allowedRoles={['teacher']}>
+                  <PrivateRoute allowedRoles={['teacher', 'admin']}>
                     <TeacherDashboard />
                   </PrivateRoute>
                 } 

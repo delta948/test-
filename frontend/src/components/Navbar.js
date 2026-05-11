@@ -14,7 +14,7 @@ const Navbar = () => {
 
   const getDashboardLink = () => {
     if (!user) return '/';
-    return user.role === 'teacher' ? '/teacher/dashboard' : '/student/dashboard';
+    return user.role === 'teacher' || user.role === 'admin' ? '/teacher/dashboard' : '/student/dashboard';
   };
 
   return (
@@ -58,22 +58,7 @@ const Navbar = () => {
                   Выйти
                 </button>
               </div>
-            ) : (
-              <div className="flex items-center gap-2">
-                <Link
-                  to="/login"
-                  className="px-4 py-2 text-sm font-medium text-gray-700 hover:text-green-600 rounded-xl transition-all duration-200"
-                >
-                  Вход
-                </Link>
-                <Link
-                  to="/register"
-                  className="px-4 py-2 text-sm font-medium text-white bg-gradient-to-r from-green-600 to-green-500 rounded-xl shadow-lg hover:shadow-xl transition-all duration-200 hover:-translate-y-0.5"
-                >
-                  Регистрация
-                </Link>
-              </div>
-            )}
+            ) : null}
           </div>
 
           <div className="md:hidden flex items-center">
@@ -108,16 +93,7 @@ const Navbar = () => {
                   Выйти
                 </button>
               </>
-            ) : (
-              <>
-                <Link to="/login" className="block px-3 py-2 text-sm text-gray-700 hover:bg-gray-100 rounded-xl">
-                  Вход
-                </Link>
-                <Link to="/register" className="block px-3 py-2 text-sm text-primary-600 font-medium hover:bg-primary-50 rounded-xl">
-                  Регистрация
-                </Link>
-              </>
-            )}
+            ) : null}
           </div>
         </div>
       )}
