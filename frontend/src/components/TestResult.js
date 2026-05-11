@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import axios from 'axios';
+import { useAuth } from '../context/AuthContext';
 
 const API_URL = 'http://localhost:8000/api';
 
 const TestResult = () => {
   const { attemptId } = useParams();
   const navigate = useNavigate();
+  const { logout } = useAuth();
   
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -27,6 +29,17 @@ const TestResult = () => {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (!result || loading || error) return undefined;
+
+    const timeoutId = window.setTimeout(() => {
+      logout();
+      navigate('/login', { replace: true });
+    }, 15000);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [error, loading, logout, navigate, result]);
 
   const getScoreColor = (score, total) => {
     const percentage = (score / total) * 100;
@@ -59,9 +72,6 @@ const TestResult = () => {
         <div className="alert alert-danger" role="alert">
           {error}
         </div>
-        <button className="btn btn-primary" onClick={() => navigate('/student/dashboard')}>
-          На главную
-        </button>
       </div>
     );
   }
@@ -124,14 +134,6 @@ const TestResult = () => {
               </div>
             </div>
 
-            <div className="mt-5">
-              <button 
-                className="btn btn-primary btn-lg me-3"
-                onClick={() => navigate('/student/dashboard')}
-              >
-                Вернуться на главную
-              </button>
-            </div>
           </div>
         </div>
       </div>

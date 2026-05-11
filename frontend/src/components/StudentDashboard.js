@@ -2,9 +2,10 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
+import useTestContentProtection from '../hooks/useTestContentProtection';
 
 const API_URL = 'http://localhost:8000/api';
-const TEST_DURATION_SECONDS = 60;
+const TEST_DURATION_SECONDS = 60 * 60;
 
 const getAuthHeaders = () => {
   const token = localStorage.getItem('token');
@@ -47,6 +48,7 @@ const formatTimeLeft = (seconds) => {
 
 const StudentDashboard = () => {
   const { user } = useAuth();
+  useTestContentProtection();
   const [tests, setTests] = useState([]);
   const [questions, setQuestions] = useState([]);
   const [answers, setAnswers] = useState({});
@@ -277,7 +279,7 @@ const StudentDashboard = () => {
   );
 
   return (
-    <div className="max-w-4xl mx-auto px-4 py-8">
+    <div className="protected-test-content max-w-4xl mx-auto px-4 py-8">
       <div className="mb-8">
         <div className="flex items-center justify-between gap-4">
           <h1 className="text-2xl font-bold text-gray-900">Аскердик даярдык</h1>

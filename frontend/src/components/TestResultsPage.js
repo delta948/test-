@@ -1,12 +1,14 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import axios from 'axios';
+import { useAuth } from '../context/AuthContext';
 
 const API_URL = 'http://localhost:8000/api';
 
 const TestResultsPage = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { logout } = useAuth();
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -49,6 +51,17 @@ const TestResultsPage = () => {
     }
   };
 
+  useEffect(() => {
+    if (!result || loading || error) return undefined;
+
+    const timeoutId = window.setTimeout(() => {
+      logout();
+      navigate('/login', { replace: true });
+    }, 15000);
+
+    return () => window.clearTimeout(timeoutId);
+  }, [error, loading, logout, navigate, result]);
+
   const getGrade = (percentage) => {
     if (percentage >= 90) return { label: 'Отлично', color: 'green' };
     if (percentage >= 75) return { label: 'Хорошо', color: 'blue' };
@@ -69,12 +82,6 @@ const TestResultsPage = () => {
       <div className="max-w-2xl mx-auto px-4 py-8">
         <div className="bg-red-50 border border-red-200 rounded-2xl p-8 text-center">
           <p className="text-red-700">{error || 'Результат не найден'}</p>
-          <button
-            onClick={() => navigate('/student-dashboard')}
-            className="mt-4 px-6 py-2 bg-red-500 hover:bg-red-600 text-white rounded-xl"
-          >
-            Вернуться
-          </button>
         </div>
       </div>
     );
@@ -146,15 +153,6 @@ const TestResultsPage = () => {
           </p>
         </div>
 
-        {/* Action Buttons */}
-        <div className="flex justify-center gap-4 mt-8">
-          <button
-            onClick={() => navigate('/student/dashboard')}
-            className="px-6 py-3 bg-gray-200 hover:bg-gray-300 text-gray-700 font-medium rounded-xl transition-colors"
-          >
-            Вернуться к списку тестов
-          </button>
-        </div>
       </div>
     </div>
   );

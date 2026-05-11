@@ -7,7 +7,7 @@ from .views import (
     AvailableTestsView, StartAttemptView, GetTestQuestionsView,
     SubmitAnswerView, CompleteTestView, GetTestResultView,
     StudentAttemptsView, TeacherResultsView, TeacherTestResultsView,
-    TeacherAttemptResultView, StudentCountView, CreateTeacherView
+    TeacherAttemptResultView, StudentCountView, CreateTeacherView, TeacherListView
 )
 
 def api_root(request):
@@ -52,6 +52,7 @@ urlpatterns = [
     path('teacher/tests/<int:test_id>/results/', TeacherTestResultsView.as_view(), name='test-results'),
     path('teacher/attempts/<int:attempt_id>/result/', TeacherAttemptResultView.as_view(), name='teacher-attempt-result'),
     path('teacher/create-teacher/', CreateTeacherView.as_view(), name='create-teacher'),
+    path('teacher/list/', TeacherListView.as_view(), name='teacher-list'),
     
     path('student-count/', StudentCountView.as_view(), name='student-count'),
 ]

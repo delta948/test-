@@ -31,6 +31,24 @@ const downloadBlob = (content, filename, type) => {
   URL.revokeObjectURL(url);
 };
 
+const sanitizeFilename = (value) =>
+  String(value || 'student-test')
+    .replace(/[\\/:*?"<>|]+/g, '_')
+    .replace(/\s+/g, '_')
+    .slice(0, 80);
+
+const formatDateFilter = (value) => {
+  if (!value) return '';
+  return new Date(value).toLocaleDateString('ru-RU');
+};
+
+const normalizeDateInput = (value) =>
+  value
+    .replace(/[^\d.]/g, '')
+    .replace(/^(\d{2})(?=\d)/, '$1.')
+    .replace(/^(\d{2}\.\d{2})(?=\d)/, '$1.')
+    .slice(0, 10);
+
 const TeacherDashboard = () => {
   const { user } = useAuth();
   const [questions, setQuestions] = useState([]);
@@ -67,6 +85,9 @@ const TeacherDashboard = () => {
     password: ''
   });
   const [showCreateTeacher, setShowCreateTeacher] = useState(false);
+  const [showTeacherList, setShowTeacherList] = useState(false);
+  const [teachers, setTeachers] = useState([]);
+  const [loadingTeachers, setLoadingTeachers] = useState(false);
 
   useEffect(() => {
     fetchData();
@@ -182,10 +203,38 @@ const TeacherDashboard = () => {
         password: ''
       });
       setShowCreateTeacher(false);
+      fetchTeachers();
       alert('Учитель успешно создан');
     } catch (error) {
       console.error('Error creating teacher:', error);
       alert('Ошибка создания учителя');
+    }
+  };
+
+  const fetchTeachers = async () => {
+    setLoadingTeachers(true);
+    setError(null);
+
+    try {
+      const token = localStorage.getItem('token');
+      const response = await axios.get(`${API_URL}/teacher/list/`, {
+        headers: { 'Authorization': `Bearer ${token}` }
+      });
+      setTeachers(extractArray(response.data, 'teachers'));
+    } catch (error) {
+      console.error('Error loading teachers:', error);
+      setTeachers([]);
+      setError(error.response?.data?.detail || error.response?.data?.error || 'Ошибка загрузки списка учителей');
+    } finally {
+      setLoadingTeachers(false);
+    }
+  };
+
+  const handleToggleTeacherList = () => {
+    const nextVisible = !showTeacherList;
+    setShowTeacherList(nextVisible);
+    if (nextVisible && teachers.length === 0) {
+      fetchTeachers();
     }
   };
 
@@ -238,159 +287,98 @@ const TeacherDashboard = () => {
     return fullName || result?.student_username || 'Без имени';
   };
 
-  const buildExportRows = () => {
-    const rows = [];
-
-    (filteredResults || []).forEach((result) => {
-      rows.push({
-        type: 'summary',
-        date: result.completed_at ? new Date(result.completed_at).toLocaleString('ru-RU') : '-',
-        student: getStudentName(result),
-        username: result.student_username || '-',
-        test: result.test_title || '-',
-        question: '',
-        selected: '',
-        status: '',
-        score: `${result.score || 0}/${result.total_questions || 0}`,
-      });
+  const buildStudentTestDocument = (detail) => {
+    const answersByQuestionId = new Map(
+      (detail?.attempt?.answers || []).map((answer) => [answer.question?.id, answer])
+    );
+    const questionsForExport = (detail?.questions || []).length
+      ? detail.questions
+      : (detail?.attempt?.answers || []).map((answer) => answer.question).filter(Boolean);
+    const studentName = getStudentName({
+      student_name: `${detail?.student?.first_name || ''} ${detail?.student?.last_name || ''}`,
+      student_username: detail?.student?.username,
     });
-
-    if (selectedResultDetail) {
-      rows.push({
-        type: 'separator',
-        date: '',
-        student: 'Детализация выбранного студента',
-        username: '',
-        test: '',
-        question: '',
-        selected: '',
-        status: '',
-        score: '',
-      });
-
-      (selectedResultDetail.attempt?.answers || []).forEach((answer, index) => {
-        const selectedAnswer = (answer.question?.answers || []).find(
-          (item) => item.key === answer.selected_option
-        );
-
-        rows.push({
-          type: answer.is_correct ? 'correct' : 'incorrect',
-          date: selectedResultDetail.attempt?.completed_at
-            ? new Date(selectedResultDetail.attempt.completed_at).toLocaleString('ru-RU')
-            : '-',
-          student: getStudentName({
-            student_name: `${selectedResultDetail.student?.first_name || ''} ${selectedResultDetail.student?.last_name || ''}`,
-            student_username: selectedResultDetail.student?.username,
-          }),
-          username: selectedResultDetail.student?.username || '-',
-          test: selectedResultDetail.attempt?.test?.title || selectedResultDetail.attempt?.test?.test_title || '-',
-          question: `${index + 1}. ${answer.question?.text || ''}`,
-          selected: `${answer.selected_option}${selectedAnswer?.text ? ` - ${selectedAnswer.text}` : ''}`,
-          status: answer.is_correct ? 'Правильно' : 'Неправильно',
-          score: '',
-        });
-      });
-    }
-
-    return rows;
-  };
-
-  const buildExportTableHtml = () => {
-    const rows = buildExportRows();
-    const body = rows.map((row) => {
-      const bg = row.type === 'correct'
-        ? '#dcfce7'
-        : row.type === 'incorrect'
-          ? '#fee2e2'
-          : row.type === 'separator'
-            ? '#e5e7eb'
-            : '#ffffff';
+    const testTitle = detail?.attempt?.test?.title || '-';
+    const completedAt = detail?.attempt?.completed_at
+      ? new Date(detail.attempt.completed_at).toLocaleString('ru-RU')
+      : '-';
+    const rows = questionsForExport.map((question, index) => {
+      const answer = answersByQuestionId.get(question.id);
+      const selectedKey = answer?.selected_option || '';
+      const selectedText = selectedKey
+        ? question[`option_${selectedKey.toLowerCase()}`] || ''
+        : '';
+      const statusText = answer
+        ? (answer.is_correct ? 'Правильно' : 'Неправильно')
+        : 'Нет ответа';
+      const bg = answer
+        ? (answer.is_correct ? '#dcfce7' : '#fee2e2')
+        : '#f9fafb';
 
       return `
         <tr style="background:${bg}">
-          <td>${escapeHtml(row.date)}</td>
-          <td>${escapeHtml(row.student)}</td>
-          <td>${escapeHtml(row.username)}</td>
-          <td>${escapeHtml(row.test)}</td>
-          <td>${escapeHtml(row.question)}</td>
-          <td>${escapeHtml(row.selected)}</td>
-          <td>${escapeHtml(row.status)}</td>
-          <td>${escapeHtml(row.score)}</td>
+          <td>${index + 1}</td>
+          <td>${escapeHtml(question.text || '')}</td>
+          <td>A. ${escapeHtml(question.option_a || '')}<br />B. ${escapeHtml(question.option_b || '')}<br />C. ${escapeHtml(question.option_c || '')}</td>
+          <td>${escapeHtml(selectedKey || '-')} ${selectedText ? `- ${escapeHtml(selectedText)}` : ''}</td>
+          <td>${escapeHtml(question.correct_answer || '-')}</td>
+          <td>${escapeHtml(statusText)}</td>
         </tr>
       `;
     }).join('');
 
     return `
-      <table>
-        <thead>
-          <tr>
-            <th>Дата</th>
-            <th>ФИО студента</th>
-            <th>Логин</th>
-            <th>Тест</th>
-            <th>Вопрос</th>
-            <th>Выбранный вариант</th>
-            <th>Статус</th>
-            <th>Результат</th>
-          </tr>
-        </thead>
-        <tbody>${body}</tbody>
-      </table>
+      <!doctype html>
+      <html>
+        <head>
+          <meta charset="utf-8" />
+          <style>
+            body { font-family: Arial, sans-serif; color: #111827; }
+            h1 { font-size: 22px; margin-bottom: 6px; }
+            p { margin: 0 0 8px; color: #4b5563; }
+            table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 16px; }
+            th, td { border: 1px solid #d1d5db; padding: 8px; vertical-align: top; }
+            th { background: #f3f4f6; text-align: left; }
+          </style>
+        </head>
+        <body>
+          <h1>Тест студента</h1>
+          <p><strong>Студент:</strong> ${escapeHtml(studentName)}</p>
+          <p><strong>Логин:</strong> ${escapeHtml(detail?.student?.username || '-')}</p>
+          <p><strong>Тест:</strong> ${escapeHtml(testTitle)}</p>
+          <p><strong>Дата сдачи:</strong> ${escapeHtml(completedAt)}</p>
+          <p><strong>Результат:</strong> ${escapeHtml(detail?.correct_count || 0)} / ${escapeHtml(detail?.total_questions || questionsForExport.length)}</p>
+          <table>
+            <thead>
+              <tr>
+                <th>№</th>
+                <th>Вопрос</th>
+                <th>Варианты</th>
+                <th>Ответ студента</th>
+                <th>Правильный ответ</th>
+                <th>Статус</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </body>
+      </html>
     `;
   };
 
-  const buildExportDocument = () => `
-    <!doctype html>
-    <html>
-      <head>
-        <meta charset="utf-8" />
-        <style>
-          body { font-family: Arial, sans-serif; color: #111827; }
-          h1 { font-size: 22px; margin-bottom: 6px; }
-          p { margin: 0 0 16px; color: #4b5563; }
-          table { width: 100%; border-collapse: collapse; font-size: 12px; }
-          th, td { border: 1px solid #d1d5db; padding: 8px; vertical-align: top; }
-          th { background: #f3f4f6; text-align: left; }
-        </style>
-      </head>
-      <body>
-        <h1>Отчёт по сданным тестам</h1>
-        <p>Дата формирования: ${escapeHtml(new Date().toLocaleString('ru-RU'))}</p>
-        ${buildExportTableHtml()}
-      </body>
-    </html>
-  `;
+  const handleDownloadStudentTest = () => {
+    if (!selectedResultDetail) return;
 
-  const handleExportExcel = () => {
-    const documentHtml = buildExportDocument();
-    downloadBlob(
-      `\ufeff${documentHtml}`,
-      `results-${new Date().toISOString().slice(0, 10)}.xls`,
-      'application/vnd.ms-excel;charset=utf-8'
-    );
-  };
+    const studentName = getStudentName({
+      student_name: `${selectedResultDetail.student?.first_name || ''} ${selectedResultDetail.student?.last_name || ''}`,
+      student_username: selectedResultDetail.student?.username,
+    });
 
-  const handleExportWord = () => {
-    const documentHtml = buildExportDocument();
     downloadBlob(
-      `\ufeff${documentHtml}`,
-      `results-${new Date().toISOString().slice(0, 10)}.doc`,
+      `\ufeff${buildStudentTestDocument(selectedResultDetail)}`,
+      `${sanitizeFilename(studentName)}-test-${selectedResultDetail.attempt?.id || 'result'}.doc`,
       'application/msword;charset=utf-8'
     );
-  };
-
-  const handleExportPdf = () => {
-    const printWindow = window.open('', '_blank');
-    if (!printWindow) {
-      setError('Браузер заблокировал окно печати. Разрешите всплывающие окна для скачивания PDF.');
-      return;
-    }
-
-    printWindow.document.open();
-    printWindow.document.write(buildExportDocument());
-    printWindow.document.close();
-    printWindow.focus();
-    printWindow.print();
   };
 
   if (loading) {
@@ -403,7 +391,7 @@ const TeacherDashboard = () => {
 
   const filteredResults = (results || []).filter((result) => {
     const completedDate = result.completed_at
-      ? new Date(result.completed_at).toISOString().slice(0, 10)
+      ? formatDateFilter(result.completed_at)
       : '';
 
     return (
@@ -469,40 +457,17 @@ const TeacherDashboard = () => {
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Дата сдачи</label>
                 <input
-                  type="date"
+                  type="text"
+                  inputMode="numeric"
                   className="input-modern"
+                  placeholder="дд.мм.гггг"
+                  maxLength="10"
                   value={resultFilters.date}
-                  onChange={(e) => setResultFilters({ ...resultFilters, date: e.target.value })}
+                  onChange={(e) => setResultFilters({ ...resultFilters, date: normalizeDateInput(e.target.value) })}
                 />
               </div>
             </div>
 
-            <div className="mt-5 flex flex-wrap gap-3">
-              <button
-                type="button"
-                onClick={handleExportPdf}
-                disabled={(filteredResults || []).length === 0}
-                className="px-4 py-2 rounded-lg bg-red-600 text-white text-sm font-medium hover:bg-red-700 disabled:bg-gray-300 disabled:text-gray-500"
-              >
-                Скачать PDF
-              </button>
-              <button
-                type="button"
-                onClick={handleExportWord}
-                disabled={(filteredResults || []).length === 0}
-                className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:bg-gray-300 disabled:text-gray-500"
-              >
-                Скачать Word
-              </button>
-              <button
-                type="button"
-                onClick={handleExportExcel}
-                disabled={(filteredResults || []).length === 0}
-                className="px-4 py-2 rounded-lg bg-green-600 text-white text-sm font-medium hover:bg-green-700 disabled:bg-gray-300 disabled:text-gray-500"
-              >
-                Скачать Excel
-              </button>
-            </div>
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
@@ -576,7 +541,7 @@ const TeacherDashboard = () => {
                 <div className="p-8 text-center text-gray-500">Выберите студента слева</div>
               ) : (
                 <div className="p-5">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-5">
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-5">
                     <div className="rounded-xl bg-green-50 border border-green-200 p-4">
                       <div className="text-2xl font-bold text-green-700">{selectedResultDetail.correct_count}</div>
                       <div className="text-sm text-gray-600">Правильных</div>
@@ -589,13 +554,28 @@ const TeacherDashboard = () => {
                       <div className="text-2xl font-bold text-blue-700">{selectedResultDetail.total_questions}</div>
                       <div className="text-sm text-gray-600">Всего вопросов</div>
                     </div>
+                    <button
+                      type="button"
+                      onClick={handleDownloadStudentTest}
+                      className="rounded-xl bg-gray-900 p-4 text-left text-white hover:bg-gray-800 transition-colors"
+                    >
+                      <div className="text-base font-semibold">Скачать тест</div>
+                      <div className="text-sm text-gray-300">Файл студента</div>
+                    </button>
                   </div>
 
                   <div className="space-y-3 max-h-[520px] overflow-y-auto pr-1">
                     {(selectedResultDetail.attempt?.answers || []).map((answer, index) => {
+                      const fullQuestion = (selectedResultDetail.questions || []).find(
+                        (question) => question.id === answer.question?.id
+                      );
                       const selectedAnswer = (answer.question?.answers || []).find(
                         (item) => item.key === answer.selected_option
                       );
+                      const correctKey = fullQuestion?.correct_answer;
+                      const correctText = correctKey
+                        ? fullQuestion?.[`option_${correctKey.toLowerCase()}`]
+                        : '';
 
                       return (
                         <div
@@ -619,6 +599,12 @@ const TeacherDashboard = () => {
                                 Выбрал: {answer.selected_option}
                                 {selectedAnswer?.text ? ` - ${selectedAnswer.text}` : ''}
                               </div>
+                              {!answer.is_correct && correctKey && (
+                                <div className="mt-2 inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-600 text-white">
+                                  Правильный ответ: {correctKey}
+                                  {correctText ? ` - ${correctText}` : ''}
+                                </div>
+                              )}
                             </div>
                             <span className={`shrink-0 text-xs font-semibold px-2 py-1 rounded-full ${
                               answer.is_correct
@@ -913,15 +899,77 @@ const TeacherDashboard = () => {
 
       {activeTab === 'teachers' && canManageTeachers && (
         <div>
-          <div className="mb-4">
+          <div className="mb-4 flex flex-wrap gap-3">
             <button 
               className="px-6 py-3 bg-gradient-to-r from-green-600 to-green-500 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200"
               onClick={() => setShowCreateTeacher(!showCreateTeacher)}
             >
               {showCreateTeacher ? 'Отмена' : 'Создать учителя'}
             </button>
+            <button
+              type="button"
+              className="px-6 py-3 bg-white text-gray-800 font-semibold rounded-xl border border-gray-200 shadow-sm hover:bg-gray-50 transition-all duration-200"
+              onClick={handleToggleTeacherList}
+            >
+              {showTeacherList ? 'Скрыть список' : 'Список учителей'}
+            </button>
           </div>
-          
+
+          {showTeacherList && (
+            <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden mb-6">
+              <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
+                <div>
+                  <h4 className="text-xl font-semibold text-gray-900">Список учителей</h4>
+                  <p className="text-sm text-gray-500">Найдено: {teachers.length}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={fetchTeachers}
+                  className="px-4 py-2 text-sm font-medium rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200"
+                >
+                  Обновить
+                </button>
+              </div>
+
+              {loadingTeachers ? (
+                <div className="p-8 text-center text-gray-500">Загрузка...</div>
+              ) : teachers.length === 0 ? (
+                <div className="p-8 text-center text-gray-500">Учителя не найдены</div>
+              ) : (
+                <table className="w-full">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ФИО</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Логин</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Статус</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {teachers.map((teacher) => {
+                      const teacherName = `${teacher.first_name || ''} ${teacher.last_name || ''}`.trim() || '-';
+
+                      return (
+                        <tr key={teacher.id} className="hover:bg-gray-50">
+                          <td className="px-6 py-4 text-sm font-medium text-gray-900">{teacherName}</td>
+                          <td className="px-6 py-4 text-sm text-gray-500">@{teacher.username}</td>
+                          <td className="px-6 py-4">
+                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                              teacher.is_main_teacher
+                                ? 'bg-green-100 text-green-800'
+                                : 'bg-gray-100 text-gray-700'
+                            }`}>
+                              {teacher.is_main_teacher ? 'Главный учитель' : 'Учитель'}
+                            </span>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
+
           {showCreateTeacher && (
             <div className="glass-card rounded-2xl p-6 mb-6">
               <h4 className="text-xl font-semibold text-gray-900 mb-4">Создать нового учителя</h4>
