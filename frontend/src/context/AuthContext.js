@@ -86,6 +86,23 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
+  const updateStudentProfile = async (profileData) => {
+    try {
+      const response = await axios.post(`${API_URL}/student/profile/`, profileData);
+      setUser(response.data);
+      localStorage.setItem('user', JSON.stringify(response.data));
+      return { success: true, data: response.data };
+    } catch (error) {
+      return {
+        success: false,
+        error:
+          error.response?.data?.non_field_errors?.[0] ||
+          error.response?.data?.detail ||
+          'Ошибка сохранения данных'
+      };
+    }
+  };
+
   const logout = () => {
     localStorage.removeItem('token');
     localStorage.removeItem('refreshToken');
@@ -98,6 +115,7 @@ export const AuthProvider = ({ children }) => {
     user,
     login,
     register,
+    updateStudentProfile,
     logout,
     loading
   };

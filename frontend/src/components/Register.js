@@ -68,7 +68,7 @@ const Register = () => {
             if (formData.role === 'teacher') {
               navigate('/teacher/dashboard');
             } else {
-              navigate('/student/dashboard');
+              navigate('/student/profile');
             }
           }, 1000);
         } else {

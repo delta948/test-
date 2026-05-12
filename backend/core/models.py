@@ -37,7 +37,18 @@ class User(AbstractUser):
 
 class StudentProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='student_profile')
+    military_rank = models.CharField(max_length=100, blank=True, verbose_name='Воинское звание')
+    patronymic = models.CharField(max_length=150, blank=True, verbose_name='Отчество')
     created_at = models.DateTimeField(auto_now_add=True)
+
+    @property
+    def is_complete(self):
+        return all([
+            self.military_rank.strip(),
+            self.user.last_name.strip(),
+            self.user.first_name.strip(),
+            self.patronymic.strip(),
+        ])
     
     def __str__(self):
         return f"Профиль ученика: {self.user.username}"

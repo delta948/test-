@@ -19,23 +19,28 @@ const escapeHtml = (value) =>
     .replace(/"/g, '&quot;')
     .replace(/'/g, '&#039;');
 
-const downloadBlob = (content, filename, type) => {
-  const blob = new Blob([content], { type });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = filename;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
-};
-
 const sanitizeFilename = (value) =>
   String(value || 'student-test')
     .replace(/[\\/:*?"<>|]+/g, '_')
     .replace(/\s+/g, '_')
     .slice(0, 80);
+
+const printPdfDocument = (html, filename) => {
+  const printWindow = window.open('', '_blank');
+
+  if (!printWindow) {
+    alert('Разрешите всплывающие окна, чтобы сохранить PDF.');
+    return;
+  }
+
+  printWindow.document.open();
+  printWindow.document.write(html.replace('<head>', `<head><title>${escapeHtml(filename)}</title>`));
+  printWindow.document.close();
+  printWindow.focus();
+  setTimeout(() => {
+    printWindow.print();
+  }, 250);
+};
 
 const formatDateFilter = (value) => {
   if (!value) return '';
@@ -374,11 +379,9 @@ const TeacherDashboard = () => {
       student_username: selectedResultDetail.student?.username,
     });
 
-    downloadBlob(
-      `\ufeff${buildStudentTestDocument(selectedResultDetail)}`,
-      `${sanitizeFilename(studentName)}-test-${selectedResultDetail.attempt?.id || 'result'}.doc`,
-      'application/msword;charset=utf-8'
-    );
+    const filename = `${sanitizeFilename(studentName)}-test-${selectedResultDetail.attempt?.id || 'result'}.pdf`;
+
+    printPdfDocument(buildStudentTestDocument(selectedResultDetail), filename);
   };
 
   if (loading) {
@@ -559,8 +562,8 @@ const TeacherDashboard = () => {
                       onClick={handleDownloadStudentTest}
                       className="rounded-xl bg-gray-900 p-4 text-left text-white hover:bg-gray-800 transition-colors"
                     >
-                      <div className="text-base font-semibold">Скачать тест</div>
-                      <div className="text-sm text-gray-300">Файл студента</div>
+                      <div className="text-base font-semibold">Скачать PDF</div>
+                      <div className="text-sm text-gray-300">PDF файл студента</div>
                     </button>
                   </div>
 

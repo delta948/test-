@@ -47,7 +47,7 @@ const formatTimeLeft = (seconds) => {
 };
 
 const StudentDashboard = () => {
-  const { user } = useAuth();
+  const { user, logout } = useAuth();
   useTestContentProtection();
   const [tests, setTests] = useState([]);
   const [questions, setQuestions] = useState([]);
@@ -134,10 +134,12 @@ const StudentDashboard = () => {
       const answeredIds = Array.isArray(questionsRes.data?.answered_question_ids)
         ? questionsRes.data.answered_question_ids
         : [];
+      const selectedAnswers = questionsRes.data?.selected_answers || {};
 
       console.log('questions API response:', questionsRes.data);
 
       setSavedAnswerIds(answeredIds);
+      setAnswers(selectedAnswers);
       setQuestions(apiQuestions.map(normalizeQuestion));
     } catch (err) {
       console.error('Error fetching questions:', err);
@@ -159,7 +161,7 @@ const StudentDashboard = () => {
 
   const selectAnswer = async (questionId, selectedOption) => {
     if (!questionId || !selectedOption) return;
-    if (!attemptId || savedAnswerIds.includes(questionId)) return;
+    if (!attemptId) return;
 
     setAnswers((prev) => ({
       ...(prev || {}),
@@ -175,7 +177,7 @@ const StudentDashboard = () => {
         },
         { headers: getAuthHeaders() }
       );
-      setSavedAnswerIds((prev) => [...new Set([...(prev || []), questionId])]);
+      setSavedAnswerIds((prev) => [...new Set([...(prev || []), Number(questionId)])]);
     } catch (err) {
       const errorMessage = err.response?.data?.error || err.message || 'Ошибка при сохранении ответа';
       setError(errorMessage);
@@ -226,7 +228,8 @@ const StudentDashboard = () => {
         { headers: getAuthHeaders() }
       );
 
-      navigate(`/test-results/${attemptId}`);
+      logout();
+      navigate('/login', { replace: true });
     } catch (err) {
       console.error('Error completing test:', err);
       setError(
@@ -239,7 +242,7 @@ const StudentDashboard = () => {
     } finally {
       setSubmitting(false);
     }
-  }, [attemptId, navigate, savedAnswerIds]);
+  }, [attemptId, logout, navigate, savedAnswerIds]);
 
   useEffect(() => {
     if (!deadlineMs || loading || submitting) return undefined;
