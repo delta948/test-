@@ -2,7 +2,7 @@ import React from 'react';
 import { Navigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 
-const PrivateRoute = ({ children, allowedRoles }) => {
+const PrivateRoute = ({ children, allowedRoles, requireStudentProfile = false }) => {
   const { user, loading } = useAuth();
 
   if (loading) {
@@ -21,6 +21,10 @@ const PrivateRoute = ({ children, allowedRoles }) => {
 
   if (allowedRoles && !allowedRoles.includes(user.role)) {
     return <Navigate to="/login" replace />;
+  }
+
+  if (requireStudentProfile && user.role === 'student' && !user.student_profile_completed) {
+    return <Navigate to="/student/profile" replace />;
   }
 
   return children;

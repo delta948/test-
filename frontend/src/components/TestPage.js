@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
+import { useAuth } from '../context/AuthContext';
 import useTestContentProtection from '../hooks/useTestContentProtection';
 
 const API_URL = 'http://localhost:8000/api';
@@ -17,11 +18,13 @@ const formatTimeLeft = (seconds) => {
 const TestPage = () => {
   const { attemptId } = useParams();
   const navigate = useNavigate();
+  const { logout } = useAuth();
   useTestContentProtection();
 
   const [questions, setQuestions] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [answeredQuestions, setAnsweredQuestions] = useState([]);
+  const [selectedAnswers, setSelectedAnswers] = useState({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -43,7 +46,8 @@ const TestPage = () => {
       });
 
       localStorage.removeItem(`test_progress_${attemptId}`);
-      navigate(`/test-results/${attemptId}`);
+      logout();
+      navigate('/login', { replace: true });
     } catch (err) {
       const errorMsg =
         err.response?.data?.error ||
@@ -61,6 +65,7 @@ const TestPage = () => {
       const response = await axios.get(`${API_URL}/student/attempts/${attemptId}/questions/`);
       const apiQuestions = Array.isArray(response.data?.questions) ? response.data.questions : [];
       const answeredIds = response.data?.answered_question_ids || [];
+      const savedSelectedAnswers = response.data?.selected_answers || {};
       const expiresAt = response.data?.expires_at;
       const nextDeadlineMs = expiresAt
         ? Date.parse(expiresAt)
@@ -68,14 +73,13 @@ const TestPage = () => {
 
       setQuestions(apiQuestions);
       setAnsweredQuestions(answeredIds);
+      setSelectedAnswers(savedSelectedAnswers);
       setDeadlineMs(nextDeadlineMs);
       setTimeLeftSeconds(Math.max(0, Math.ceil((nextDeadlineMs - Date.now()) / 1000)));
 
       const firstUnanswered = apiQuestions.findIndex((question) => !answeredIds.includes(question.id));
       if (firstUnanswered !== -1) {
         setCurrentIndex(firstUnanswered);
-      } else if (answeredIds.length === apiQuestions.length && apiQuestions.length > 0) {
-        completeTest();
       } else {
         setCurrentIndex(response.data?.current_question_index || 0);
       }
@@ -121,11 +125,6 @@ const TestPage = () => {
     const currentQuestion = questions[currentIndex];
     if (!currentQuestion) return;
 
-    if (answeredQuestions.includes(currentQuestion.id)) {
-      setError('Вы уже ответили на этот вопрос');
-      return;
-    }
-
     setSaving(true);
     setError('');
 
@@ -135,21 +134,26 @@ const TestPage = () => {
         selected_option: selectedOption,
       });
 
-      const nextAnsweredQuestions = [...answeredQuestions, currentQuestion.id];
+      const nextAnsweredQuestions = [...new Set([...answeredQuestions, currentQuestion.id])];
       setAnsweredQuestions(nextAnsweredQuestions);
+      setSelectedAnswers((prev) => ({
+        ...prev,
+        [currentQuestion.id]: selectedOption,
+      }));
       localStorage.setItem(`test_progress_${attemptId}`, String(currentIndex + 1));
 
       if (currentIndex < questions.length - 1) {
         setCurrentIndex(currentIndex + 1);
-      } else if (nextAnsweredQuestions.length >= questions.length) {
-        completeTest();
       }
     } catch (err) {
       const errorMsg = err.response?.data?.error || 'Ошибка при сохранении ответа';
       setError(errorMsg);
 
       if (errorMsg.includes('Время теста истекло')) {
-        setTimeout(() => navigate(`/test-results/${attemptId}`), 1200);
+        setTimeout(() => {
+          logout();
+          navigate('/login', { replace: true });
+        }, 1200);
       }
     } finally {
       setSaving(false);
@@ -207,6 +211,7 @@ const TestPage = () => {
 
   const currentQuestion = questions[currentIndex];
   const isCurrentAnswered = answeredQuestions.includes(currentQuestion?.id);
+  const currentSelectedAnswer = selectedAnswers[currentQuestion?.id];
   const progress = questions.length ? ((currentIndex + 1) / questions.length) * 100 : 0;
   const timeLeftPercent = Math.max(0, Math.min(100, (timeLeftSeconds / TEST_DURATION_SECONDS) * 100));
   const currentAnswers = currentQuestion?.answers || [
@@ -266,6 +271,8 @@ const TestPage = () => {
 
           <div className="answer-buttons">
             {currentAnswers.map((answer, index) => {
+              const answerKey = answer.original_key || answer.key;
+              const isSelected = currentSelectedAnswer === answerKey;
               const colors = [
                 'bg-gradient-to-r from-blue-500 to-blue-600 text-white hover:from-blue-600 hover:to-blue-700',
                 'bg-gradient-to-r from-emerald-500 to-emerald-600 text-white hover:from-emerald-600 hover:to-emerald-700',
@@ -275,9 +282,9 @@ const TestPage = () => {
               return (
                 <button
                   key={answer.key}
-                  className={`answer-btn ${isCurrentAnswered ? 'bg-gray-300 text-gray-500 cursor-not-allowed' : colors[index]}`}
-                  onClick={() => submitAnswer(answer.key)}
-                  disabled={isCurrentAnswered || saving || completing}
+                  className={`answer-btn ${isSelected ? 'bg-green-600 text-white ring-4 ring-green-200' : colors[index]}`}
+                  onClick={() => submitAnswer(answerKey)}
+                  disabled={saving || completing}
                 >
                   {saving ? (
                     <div className="spinner-modern w-5 h-5 border-2 mx-auto"></div>

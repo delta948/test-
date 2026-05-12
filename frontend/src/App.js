@@ -6,6 +6,7 @@ import Login from './components/Login';
 import Register from './components/Register';
 import TeacherDashboard from './components/TeacherDashboard';
 import StudentDashboard from './components/StudentDashboard';
+import StudentProfileSetup from './components/StudentProfileSetup';
 import TestPage from './components/TestPage';
 import TestResult from './components/TestResult';
 import TestResultsPage from './components/TestResultsPage';
@@ -31,9 +32,17 @@ function App() {
                 } 
               />
               <Route 
-                path="/student/dashboard" 
+                path="/student/profile" 
                 element={
                   <PrivateRoute allowedRoles={['student']}>
+                    <StudentProfileSetup />
+                  </PrivateRoute>
+                } 
+              />
+              <Route 
+                path="/student/dashboard" 
+                element={
+                  <PrivateRoute allowedRoles={['student']} requireStudentProfile>
                     <StudentDashboard />
                   </PrivateRoute>
                 } 
@@ -41,7 +50,7 @@ function App() {
               <Route 
                 path="/test/:attemptId" 
                 element={
-                  <PrivateRoute allowedRoles={['student']}>
+                  <PrivateRoute allowedRoles={['student']} requireStudentProfile>
                     <TestPage />
                   </PrivateRoute>
                 } 
@@ -49,7 +58,7 @@ function App() {
               <Route 
                 path="/result/:attemptId" 
                 element={
-                  <PrivateRoute allowedRoles={['student']}>
+                  <PrivateRoute allowedRoles={['student']} requireStudentProfile>
                     <TestResult />
                   </PrivateRoute>
                 } 
@@ -57,7 +66,7 @@ function App() {
               <Route 
                 path="/test-results/:id" 
                 element={
-                  <PrivateRoute allowedRoles={['student']}>
+                  <PrivateRoute allowedRoles={['student']} requireStudentProfile>
                     <TestResultsPage />
                   </PrivateRoute>
                 } 

@@ -13,7 +13,7 @@ from .models import Question, Test, Attempt, Answer, StudentProfile
 from .serializers import (
     UserSerializer, RegisterSerializer, CreateTeacherSerializer, QuestionSerializer, QuestionListSerializer,
     TestSerializer, TestCreateSerializer, TestListSerializer, AttemptSerializer,
-    AttemptListSerializer, SubmitAnswerSerializer, StudentResultSerializer
+    AttemptListSerializer, SubmitAnswerSerializer, StudentResultSerializer, StudentProfileUpdateSerializer
 )
 
 User = get_user_model()
@@ -130,6 +130,27 @@ class UserProfileView(APIView):
     
     def get(self, request):
         return Response(UserSerializer(request.user).data)
+
+
+class StudentProfileUpdateView(APIView):
+    permission_classes = [IsStudent]
+
+    def post(self, request):
+        serializer = StudentProfileUpdateSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        user = request.user
+        profile, _ = StudentProfile.objects.get_or_create(user=user)
+        user.last_name = serializer.validated_data['last_name']
+        user.first_name = serializer.validated_data['first_name']
+        profile.military_rank = serializer.validated_data['military_rank']
+        profile.patronymic = serializer.validated_data['patronymic']
+
+        with transaction.atomic():
+            user.save(update_fields=['last_name', 'first_name'])
+            profile.save(update_fields=['military_rank', 'patronymic'])
+
+        return Response(UserSerializer(user).data)
 
 
 class QuestionListCreateView(generics.ListCreateAPIView):
@@ -265,6 +286,12 @@ class StartAttemptView(APIView):
     permission_classes = [IsStudent]
     
     def post(self, request, test_id):
+        profile = getattr(request.user, 'student_profile', None)
+        if not profile or not profile.is_complete:
+            return Response({
+                'error': 'Заполните воинское звание, фамилию, имя и отчество перед началом теста.'
+            }, status=status.HTTP_400_BAD_REQUEST)
+
         cleanup_old_completed_attempts()
         try:
             test = Test.objects.get(id=test_id, is_active=True)
@@ -348,7 +375,8 @@ class GetTestQuestionsView(APIView):
         questions = get_attempt_questions(attempt)
         serializer = QuestionListSerializer(questions, many=True)
         
-        answered_questions = Answer.objects.filter(attempt=attempt).values_list('question_id', flat=True)
+        saved_answers = Answer.objects.filter(attempt=attempt)
+        answered_questions = saved_answers.values_list('question_id', flat=True)
         
         return Response({
             'attempt_id': attempt.id,
@@ -356,6 +384,10 @@ class GetTestQuestionsView(APIView):
             'total_questions': questions.count(),
             'questions': serializer.data,
             'answered_question_ids': list(answered_questions),
+            'selected_answers': {
+                str(answer.question_id): answer.selected_option
+                for answer in saved_answers
+            },
             'expires_at': get_attempt_expires_at(attempt),
             'duration_seconds': int(TEST_DURATION.total_seconds())
         })
@@ -397,14 +429,11 @@ class SubmitAnswerView(APIView):
         except Question.DoesNotExist:
             return Response({'error': 'Вопрос не найден в этом тесте'}, status=status.HTTP_404_NOT_FOUND)
         
-        if Answer.objects.filter(attempt=attempt, question=question).exists():
-            return Response({'error': 'Вы уже ответили на этот вопрос'}, status=status.HTTP_400_BAD_REQUEST)
-        
         with transaction.atomic():
-            answer = Answer.objects.create(
+            answer, _ = Answer.objects.update_or_create(
                 attempt=attempt,
                 question=question,
-                selected_option=selected_option
+                defaults={'selected_option': selected_option}
             )
             
             question_ids = attempt.question_order or list(attempt.questions.values_list('id', flat=True))

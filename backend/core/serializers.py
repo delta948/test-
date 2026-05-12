@@ -8,13 +8,43 @@ User = get_user_model()
 
 
 class UserSerializer(serializers.ModelSerializer):
+    military_rank = serializers.SerializerMethodField()
+    patronymic = serializers.SerializerMethodField()
+    student_profile_completed = serializers.SerializerMethodField()
+
     class Meta:
         model = User
         fields = [
             'id', 'username', 'email', 'first_name', 'last_name', 'role',
-            'is_main_teacher', 'is_staff', 'is_superuser'
+            'is_main_teacher', 'is_staff', 'is_superuser', 'military_rank',
+            'patronymic', 'student_profile_completed'
         ]
         read_only_fields = ['is_staff', 'is_superuser']
+
+    def get_military_rank(self, obj):
+        return getattr(getattr(obj, 'student_profile', None), 'military_rank', '')
+
+    def get_patronymic(self, obj):
+        return getattr(getattr(obj, 'student_profile', None), 'patronymic', '')
+
+    def get_student_profile_completed(self, obj):
+        if obj.role != 'student':
+            return True
+        profile = getattr(obj, 'student_profile', None)
+        return bool(profile and profile.is_complete)
+
+
+class StudentProfileUpdateSerializer(serializers.Serializer):
+    military_rank = serializers.CharField(max_length=100, trim_whitespace=True)
+    last_name = serializers.CharField(max_length=150, trim_whitespace=True)
+    first_name = serializers.CharField(max_length=150, trim_whitespace=True)
+    patronymic = serializers.CharField(max_length=150, trim_whitespace=True)
+
+    def validate(self, attrs):
+        for field, value in attrs.items():
+            if not value.strip():
+                raise serializers.ValidationError({field: 'Это поле обязательно.'})
+        return attrs
 
 
 class RegisterSerializer(serializers.ModelSerializer):
