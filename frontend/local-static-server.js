@@ -3,6 +3,7 @@ const http = require('http');
 const path = require('path');
 
 const root = path.join(__dirname, 'build');
+const host = process.env.HOST || '127.0.0.1';
 const port = Number(process.env.PORT || 3000);
 
 const types = {
@@ -54,6 +55,6 @@ const server = http.createServer((req, res) => {
   });
 });
 
-server.listen(port, () => {
-  console.log(`Frontend server listening at http://localhost:${port}`);
+server.listen(port, host, () => {
+  console.log(`Frontend server listening at http://${host}:${port}`);
 });
