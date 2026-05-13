@@ -268,6 +268,66 @@ const TeacherDashboard = () => {
     setSelectedQuestions([]);
   };
 
+  const renderCreateTestForm = () => (
+    <div className="dashboard-card mb-4">
+      <h5>Создание теста (100 вопросов)</h5>
+      <form onSubmit={handleCreateTest}>
+        <div className="mb-3">
+          <label className="form-label">Название теста</label>
+          <input
+            type="text"
+            className="form-control"
+            value={newTest.title}
+            onChange={(e) => setNewTest({...newTest, title: e.target.value})}
+            required
+            placeholder="Введите название теста"
+          />
+        </div>
+        
+        <div className="mb-3">
+          <label className="form-label">
+            Выбрано вопросов: {selectedQuestions.length} / 100
+          </label>
+          <div className="mb-2">
+            <button type="button" className="btn btn-sm btn-outline-primary me-2" onClick={selectAll}>
+              Выбрать первые 100
+            </button>
+            <button type="button" className="btn btn-sm btn-outline-secondary me-2" onClick={selectRandom100}>
+              Случайные 100
+            </button>
+            <button type="button" className="btn btn-sm btn-outline-danger" onClick={clearSelection}>
+              Очистить
+            </button>
+          </div>
+          <div className="border rounded p-3" style={{maxHeight: '300px', overflowY: 'auto'}}>
+            {(questions || []).map(q => (
+              <div key={q.id} className="form-check">
+                <input
+                  type="checkbox"
+                  className="form-check-input"
+                  id={`q-${q.id}`}
+                  checked={selectedQuestions.includes(q.id)}
+                  onChange={() => toggleQuestionSelection(q.id)}
+                />
+                <label className="form-check-label" htmlFor={`q-${q.id}`}>
+                  #{q.id} {q.text.substring(0, 60)}...
+                </label>
+              </div>
+            ))}
+          </div>
+        </div>
+        
+        <button 
+          type="submit" 
+          className="btn btn-primary"
+          disabled={selectedQuestions.length !== 100 || !newTest.title}
+        >
+          Создать тест
+        </button>
+      </form>
+    </div>
+  );
+
   const handleOpenResultDetail = async (result) => {
     setLoadingResultDetail(true);
     setSelectedResultDetail(null);
@@ -640,65 +700,7 @@ const TeacherDashboard = () => {
             </button>
           </div>
 
-          {showCreateTest && (
-            <div className="dashboard-card mb-4">
-              <h5>Создание теста (100 вопросов)</h5>
-              <form onSubmit={handleCreateTest}>
-                <div className="mb-3">
-                  <label className="form-label">Название теста</label>
-                  <input
-                    type="text"
-                    className="form-control"
-                    value={newTest.title}
-                    onChange={(e) => setNewTest({...newTest, title: e.target.value})}
-                    required
-                    placeholder="Введите название теста"
-                  />
-                </div>
-                
-                <div className="mb-3">
-                  <label className="form-label">
-                    Выбрано вопросов: {selectedQuestions.length} / 100
-                  </label>
-                  <div className="mb-2">
-                    <button type="button" className="btn btn-sm btn-outline-primary me-2" onClick={selectAll}>
-                      Выбрать первые 100
-                    </button>
-                    <button type="button" className="btn btn-sm btn-outline-secondary me-2" onClick={selectRandom100}>
-                      Случайные 100
-                    </button>
-                    <button type="button" className="btn btn-sm btn-outline-danger" onClick={clearSelection}>
-                      Очистить
-                    </button>
-                  </div>
-                  <div className="border rounded p-3" style={{maxHeight: '300px', overflowY: 'auto'}}>
-                    {(questions || []).map(q => (
-                      <div key={q.id} className="form-check">
-                        <input
-                          type="checkbox"
-                          className="form-check-input"
-                          id={`q-${q.id}`}
-                          checked={selectedQuestions.includes(q.id)}
-                          onChange={() => toggleQuestionSelection(q.id)}
-                        />
-                        <label className="form-check-label" htmlFor={`q-${q.id}`}>
-                          #{q.id} {q.text.substring(0, 60)}...
-                        </label>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-                
-                <button 
-                  type="submit" 
-                  className="btn btn-primary"
-                  disabled={selectedQuestions.length !== 100 || !newTest.title}
-                >
-                  Создать тест
-                </button>
-              </form>
-            </div>
-          )}
+          {showCreateTest && renderCreateTestForm()}
 
           {(tests || []).length === 0 ? (
             <div className="empty-state">
@@ -916,7 +918,16 @@ const TeacherDashboard = () => {
             >
               {showTeacherList ? 'Скрыть список' : 'Список учителей'}
             </button>
+            <button
+              type="button"
+              className="px-6 py-3 bg-white text-gray-800 font-semibold rounded-xl border border-gray-200 shadow-sm hover:bg-gray-50 transition-all duration-200"
+              onClick={() => setShowCreateTest(!showCreateTest)}
+            >
+              {showCreateTest ? 'Отмена' : 'Добавить тест'}
+            </button>
           </div>
+
+          {showCreateTest && renderCreateTestForm()}
 
           {showTeacherList && (
             <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden mb-6">
