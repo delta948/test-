@@ -50,6 +50,8 @@ const StudentDashboard = () => {
   const { user, logout } = useAuth();
   useTestContentProtection();
   const [tests, setTests] = useState([]);
+  const [selectedTestId, setSelectedTestId] = useState('');
+  const [selectedTriggerIds, setSelectedTriggerIds] = useState([]);
   const [questions, setQuestions] = useState([]);
   const [answers, setAnswers] = useState({});
   const [savedAnswerIds, setSavedAnswerIds] = useState([]);
@@ -71,6 +73,11 @@ const StudentDashboard = () => {
     () => (Array.isArray(tests) ? tests : []),
     [tests]
   );
+  const selectedTest = useMemo(
+    () => safeTests.find((test) => String(test.id) === String(selectedTestId)) || null,
+    [safeTests, selectedTestId]
+  );
+  const availableTriggers = Array.isArray(selectedTest?.triggers) ? selectedTest.triggers : [];
 
   useEffect(() => {
     answersRef.current = answers || {};
@@ -92,6 +99,8 @@ const StudentDashboard = () => {
       console.log('tests:', loadedTests);
 
       setTests(loadedTests);
+      setSelectedTestId((current) => current || (loadedTests[0]?.id ? String(loadedTests[0].id) : ''));
+      setSelectedTriggerIds((current) => current.length ? current : (loadedTests[0]?.triggers?.[0]?.id ? [String(loadedTests[0].triggers[0].id)] : []));
 
       const testId = loadedTests[0]?.id;
 
@@ -101,6 +110,9 @@ const StudentDashboard = () => {
         return;
       }
 
+      return;
+
+      // eslint-disable-next-line no-unreachable
       const startRes = await axios.post(
         `${API_URL}/student/tests/${testId}/start/`,
         {},
@@ -154,6 +166,68 @@ const StudentDashboard = () => {
       setLoading(false);
     }
   }, [user]);
+
+  const startSelectedTest = async () => {
+    if (!selectedTestId || selectedTriggerIds.length === 0) {
+      setError('Выберите тест и триггер');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const startRes = await axios.post(
+        `${API_URL}/student/tests/${selectedTestId}/start/`,
+        { trigger_ids: selectedTriggerIds.map(Number) },
+        { headers: getAuthHeaders() }
+      );
+
+      const newAttemptId = startRes.data?.attempt?.id;
+      if (!newAttemptId) {
+        throw new Error('Не удалось создать попытку теста');
+      }
+
+      const expiresAt = startRes.data?.expires_at;
+      const startedAt = startRes.data?.attempt?.started_at;
+      const nextDeadlineMs = expiresAt
+        ? Date.parse(expiresAt)
+        : Date.parse(startedAt) + TEST_DURATION_SECONDS * 1000;
+
+      submittedRef.current = false;
+      setAttemptId(newAttemptId);
+      setDeadlineMs(nextDeadlineMs);
+      setTimeLeftSeconds(Math.max(0, Math.ceil((nextDeadlineMs - Date.now()) / 1000)));
+
+      const questionsRes = await axios.get(
+        `${API_URL}/student/attempts/${newAttemptId}/questions/`,
+        { headers: getAuthHeaders() }
+      );
+
+      const apiQuestions = Array.isArray(questionsRes.data?.questions)
+        ? questionsRes.data.questions
+        : [];
+      const answeredIds = Array.isArray(questionsRes.data?.answered_question_ids)
+        ? questionsRes.data.answered_question_ids
+        : [];
+      const selectedAnswers = questionsRes.data?.selected_answers || {};
+
+      setSavedAnswerIds(answeredIds);
+      setAnswers(selectedAnswers);
+      setQuestions(apiQuestions.map(normalizeQuestion));
+    } catch (err) {
+      console.error('Error starting test:', err);
+      setQuestions([]);
+      setError(
+        err.response?.data?.error ||
+          err.response?.data?.detail ||
+          err.message ||
+          'Ошибка запуска теста'
+      );
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
     fetchQuestions();
@@ -267,6 +341,81 @@ const StudentDashboard = () => {
       <div className="loading-spinner">
         <div className="spinner-modern"></div>
         <p className="mt-4 text-gray-600 font-medium">Загрузка вопросов...</p>
+      </div>
+    );
+  }
+
+  if (!attemptId) {
+    return (
+      <div className="max-w-3xl mx-auto px-4 py-10">
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
+          <h1 className="text-2xl font-bold text-gray-900 mb-6">Выбор тестирования</h1>
+
+          {error && (
+            <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl">
+              <p className="text-red-700">{error}</p>
+            </div>
+          )}
+
+          {safeTests.length === 0 ? (
+            <p className="text-gray-600">Нет доступных тестов</p>
+          ) : (
+            <div className="space-y-5">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Тест</label>
+                <select
+                  className="w-full rounded-xl border border-gray-300 px-4 py-3"
+                  value={selectedTestId}
+                  onChange={(event) => {
+                    const nextTestId = event.target.value;
+                    const nextTest = safeTests.find((test) => String(test.id) === String(nextTestId));
+                    setSelectedTestId(nextTestId);
+                    setSelectedTriggerIds(nextTest?.triggers?.[0]?.id ? [String(nextTest.triggers[0].id)] : []);
+                  }}
+                >
+                  {safeTests.map((test) => (
+                    <option key={test.id} value={test.id}>{test.title}</option>
+                  ))}
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Триггеры</label>
+                <div className="space-y-2 rounded-xl border border-gray-300 p-4">
+                  {availableTriggers.map((trigger) => {
+                    const triggerId = String(trigger.id);
+                    return (
+                      <label key={trigger.id} className="flex items-center gap-3">
+                        <input
+                          type="checkbox"
+                          className="h-4 w-4"
+                          checked={selectedTriggerIds.includes(triggerId)}
+                          onChange={() => {
+                            setSelectedTriggerIds((current) =>
+                              current.includes(triggerId)
+                                ? current.filter((id) => id !== triggerId)
+                                : [...current, triggerId]
+                            );
+                          }}
+                        />
+                        <span>{trigger.name}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <button
+                type="button"
+                className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-xl disabled:bg-gray-300 disabled:cursor-not-allowed"
+                onClick={startSelectedTest}
+                disabled={!selectedTestId || selectedTriggerIds.length === 0}
+              >
+                Начать тест
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     );
   }
