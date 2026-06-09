@@ -278,7 +278,7 @@ class QuestionSerializer(serializers.ModelSerializer):
     class Meta:
         model = Question
         fields = [
-            'id', 'text', 'option_a', 'option_b', 'option_c',
+            'id', 'text', 'option_a', 'option_b', 'option_c', 'option_d',
             'correct_answer', 'trigger', 'trigger_id', 'created_at'
         ]
         read_only_fields = ['created_at']
@@ -298,15 +298,16 @@ class QuestionListSerializer(serializers.ModelSerializer):
             {'original_key': 'B', 'text': obj.option_b},
             {'original_key': 'C', 'text': obj.option_c},
         ]
+        if obj.option_d:
+            options.append({'original_key': 'D', 'text': obj.option_d})
         # Перемешиваем варианты
         random.shuffle(options)
         
         # Возвращаем с фиксированными ключами для отображения (A, B, C)
         # но с оригинальными ключами для отправки на бэкенд
         return [
-            {'key': 'A', 'text': options[0]['text'], 'original_key': options[0]['original_key']},
-            {'key': 'B', 'text': options[1]['text'], 'original_key': options[1]['original_key']},
-            {'key': 'C', 'text': options[2]['text'], 'original_key': options[2]['original_key']},
+            {'key': chr(65 + index), 'text': option['text'], 'original_key': option['original_key']}
+            for index, option in enumerate(options)
         ]
 
 
@@ -359,6 +360,48 @@ class TestCreateSerializer(serializers.ModelSerializer):
         
         return value
 
+    def build_question_ids_for_triggers(self, triggers):
+        trigger_ids = [trigger.id for trigger in triggers]
+        questions_by_trigger = {}
+        total_available = 0
+
+        for trigger in triggers:
+            question_ids = list(
+                Question.objects.filter(trigger=trigger)
+                .values_list('id', flat=True)
+            )
+            random.shuffle(question_ids)
+            questions_by_trigger[trigger.id] = question_ids
+            total_available += len(question_ids)
+
+        if total_available < 100:
+            raise serializers.ValidationError(
+                f"По выбранным триггерам найдено {total_available} вопросов. Нужно ровно 100."
+            )
+
+        base_quota = 100 // len(trigger_ids)
+        remainder = 100 % len(trigger_ids)
+        quotas = {trigger_id: base_quota for trigger_id in trigger_ids}
+        for trigger_id in random.sample(trigger_ids, remainder):
+            quotas[trigger_id] += 1
+
+        selected_ids = []
+        unused_ids = []
+
+        for trigger_id in trigger_ids:
+            question_ids = questions_by_trigger[trigger_id]
+            quota = quotas[trigger_id]
+            selected_ids.extend(question_ids[:quota])
+            unused_ids.extend(question_ids[quota:])
+
+        if len(selected_ids) < 100:
+            random.shuffle(unused_ids)
+            selected_ids.extend(unused_ids[:100 - len(selected_ids)])
+
+        selected_ids = selected_ids[:100]
+        random.shuffle(selected_ids)
+        return selected_ids
+
     def validate(self, attrs):
         question_ids = attrs.get('question_ids')
         trigger_ids = attrs.get('trigger_ids')
@@ -370,24 +413,14 @@ class TestCreateSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Нельзя одновременно передавать question_ids и triggers")
 
         if trigger_ids:
-            existing_trigger_ids = set(
-                QuestionTrigger.objects.filter(id__in=trigger_ids, is_active=True)
-                .values_list('id', flat=True)
-            )
-            missing = set(trigger_ids) - existing_trigger_ids
+            selected_triggers = list(QuestionTrigger.objects.filter(id__in=trigger_ids, is_active=True))
+            found_trigger_ids = {trigger.id for trigger in selected_triggers}
+            missing = set(trigger_ids) - found_trigger_ids
             if missing:
                 raise serializers.ValidationError({'trigger_ids': f'Триггеры с ID {missing} не найдены или неактивны.'})
 
-            question_ids = list(
-                Question.objects.filter(trigger_id__in=trigger_ids)
-                .order_by('?')
-                .values_list('id', flat=True)[:100]
-            )
-            if len(question_ids) != 100:
-                raise serializers.ValidationError(
-                    f"По выбранным триггерам найдено {len(question_ids)} вопросов. Нужно ровно 100."
-                )
-            attrs['question_ids'] = question_ids
+            selected_triggers.sort(key=lambda trigger: trigger_ids.index(trigger.id))
+            attrs['question_ids'] = self.build_question_ids_for_triggers(selected_triggers)
 
         return attrs
     

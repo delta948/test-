@@ -113,11 +113,13 @@ class Question(models.Model):
     option_a = models.CharField(max_length=255, verbose_name='Вариант A')
     option_b = models.CharField(max_length=255, verbose_name='Вариант B')
     option_c = models.CharField(max_length=255, verbose_name='Вариант C')
+    option_d = models.CharField(max_length=255, blank=True, default='', verbose_name='Вариант D')
     
     CORRECT_CHOICES = [
         ('A', 'Вариант A'),
         ('B', 'Вариант B'),
         ('C', 'Вариант C'),
+        ('D', 'Вариант D'),
     ]
     correct_answer = models.CharField(max_length=1, choices=CORRECT_CHOICES, verbose_name='Правильный ответ')
     trigger = models.ForeignKey(

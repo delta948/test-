@@ -612,6 +612,7 @@ class QuestionTriggerQuestionUploadView(APIView):
                     'option_a': item.get('option_a', ''),
                     'option_b': item.get('option_b', ''),
                     'option_c': item.get('option_c', ''),
+                    'option_d': item.get('option_d', ''),
                     'correct_answer': item.get('correct_answer', ''),
                     'trigger_id': trigger.id,
                 }
@@ -795,11 +796,6 @@ class AvailableTestsView(generics.ListAPIView):
         if missing_trigger_ids:
             return Response({'error': 'Триггер не найден или неактивен'}, status=status.HTTP_404_NOT_FOUND)
 
-        if test.triggers.exists():
-            allowed_trigger_ids = set(test.triggers.values_list('id', flat=True))
-            if any(trigger_id not in allowed_trigger_ids for trigger_id in trigger_ids):
-                return Response({'error': 'Выбранный триггер недоступен для этого теста'}, status=status.HTTP_400_BAD_REQUEST)
-
         selected_triggers.sort(key=lambda trigger: trigger_ids.index(trigger.id))
         selected_trigger = selected_triggers[0] if len(selected_triggers) == 1 else None
         selected_trigger_snapshot = [serialize_trigger(trigger) for trigger in selected_triggers]
@@ -855,11 +851,6 @@ class StartAttemptView(APIView):
         if set(trigger_ids) - found_trigger_ids:
             return Response({'error': 'Триггер не найден или неактивен'}, status=status.HTTP_404_NOT_FOUND)
 
-        if test.triggers.exists():
-            allowed_trigger_ids = set(test.triggers.values_list('id', flat=True))
-            if any(trigger_id not in allowed_trigger_ids for trigger_id in trigger_ids):
-                return Response({'error': 'Выбранный триггер недоступен для этого теста'}, status=status.HTTP_400_BAD_REQUEST)
-
         selected_triggers.sort(key=lambda trigger: trigger_ids.index(trigger.id))
         selected_trigger = selected_triggers[0] if len(selected_triggers) == 1 else None
         selected_trigger_snapshot = [serialize_trigger(trigger) for trigger in selected_triggers]
@@ -896,7 +887,9 @@ class StartAttemptView(APIView):
         
         question_ids, question_error = build_question_ids_for_triggers(selected_triggers)
         if question_error:
-            return Response({'error': 'Недостаточно вопросов для запуска теста'}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({
+                'error': 'Недостаточно вопросов в выбранных категориях для формирования теста из 100 вопросов.'
+            }, status=status.HTTP_400_BAD_REQUEST)
 
         if False:
             return Response({'error': 'Тест должен содержать ровно 100 вопросов'}, status=status.HTTP_400_BAD_REQUEST)

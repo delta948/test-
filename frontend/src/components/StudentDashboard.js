@@ -21,6 +21,7 @@ const normalizeAnswers = (question) => {
     { key: 'A', text: question?.option_a },
     { key: 'B', text: question?.option_b },
     { key: 'C', text: question?.option_c },
+    { key: 'D', text: question?.option_d },
   ].filter((answer) => answer.text);
 };
 
@@ -50,7 +51,6 @@ const StudentDashboard = () => {
   const { user, logout } = useAuth();
   useTestContentProtection();
   const [tests, setTests] = useState([]);
-  const [selectedTestId, setSelectedTestId] = useState('');
   const [selectedTriggerIds, setSelectedTriggerIds] = useState([]);
   const [questions, setQuestions] = useState([]);
   const [answers, setAnswers] = useState({});
@@ -73,11 +73,37 @@ const StudentDashboard = () => {
     () => (Array.isArray(tests) ? tests : []),
     [tests]
   );
-  const selectedTest = useMemo(
-    () => safeTests.find((test) => String(test.id) === String(selectedTestId)) || null,
-    [safeTests, selectedTestId]
-  );
-  const availableTriggers = Array.isArray(selectedTest?.triggers) ? selectedTest.triggers : [];
+  const availableTriggers = useMemo(() => {
+    const triggersById = new Map();
+
+    safeTests.forEach((test) => {
+      const testTriggers = Array.isArray(test?.triggers) ? test.triggers : [];
+      testTriggers.forEach((trigger) => {
+        if (!trigger?.id) return;
+        const triggerId = String(trigger.id);
+        if (!triggersById.has(triggerId)) {
+          triggersById.set(triggerId, trigger);
+        }
+      });
+    });
+
+    return Array.from(triggersById.values());
+  }, [safeTests]);
+
+  const selectedTestForTriggers = useMemo(() => {
+    if (!safeTests.length || selectedTriggerIds.length === 0) return null;
+
+    return (
+      safeTests.find((test) => {
+        const triggerIds = new Set(
+          (Array.isArray(test?.triggers) ? test.triggers : []).map((trigger) => String(trigger.id))
+        );
+        return selectedTriggerIds.every((triggerId) => triggerIds.has(String(triggerId)));
+      }) ||
+      safeTests[0] ||
+      null
+    );
+  }, [safeTests, selectedTriggerIds]);
 
   useEffect(() => {
     answersRef.current = answers || {};
@@ -99,14 +125,12 @@ const StudentDashboard = () => {
       console.log('tests:', loadedTests);
 
       setTests(loadedTests);
-      setSelectedTestId((current) => current || (loadedTests[0]?.id ? String(loadedTests[0].id) : ''));
-      setSelectedTriggerIds((current) => current.length ? current : (loadedTests[0]?.triggers?.[0]?.id ? [String(loadedTests[0].triggers[0].id)] : []));
 
       const testId = loadedTests[0]?.id;
 
-      if (!testId) {
+      if (!loadedTests.length) {
         setQuestions([]);
-        setError('Нет доступных тестов');
+        setError('Нет доступных категорий тестирования');
         return;
       }
 
@@ -168,8 +192,13 @@ const StudentDashboard = () => {
   }, [user]);
 
   const startSelectedTest = async () => {
-    if (!selectedTestId || selectedTriggerIds.length === 0) {
-      setError('Выберите тест и триггер');
+    if (selectedTriggerIds.length === 0) {
+      setError('Выберите хотя бы одну категорию тестирования');
+      return;
+    }
+
+    if (!selectedTestForTriggers?.id) {
+      setError('Нет доступного теста для выбранных категорий');
       return;
     }
 
@@ -178,7 +207,7 @@ const StudentDashboard = () => {
 
     try {
       const startRes = await axios.post(
-        `${API_URL}/student/tests/${selectedTestId}/start/`,
+        `${API_URL}/student/tests/${selectedTestForTriggers.id}/start/`,
         { trigger_ids: selectedTriggerIds.map(Number) },
         { headers: getAuthHeaders() }
       );
@@ -232,6 +261,13 @@ const StudentDashboard = () => {
   useEffect(() => {
     fetchQuestions();
   }, [fetchQuestions]);
+
+  useEffect(() => {
+    const availableTriggerIds = new Set(availableTriggers.map((trigger) => String(trigger.id)));
+    setSelectedTriggerIds((current) =>
+      current.filter((triggerId) => availableTriggerIds.has(String(triggerId)))
+    );
+  }, [availableTriggers]);
 
   const selectAnswer = async (questionId, selectedOption) => {
     if (!questionId || !selectedOption) return;
@@ -357,39 +393,30 @@ const StudentDashboard = () => {
             </div>
           )}
 
-          {safeTests.length === 0 ? (
-            <p className="text-gray-600">Нет доступных тестов</p>
+          {availableTriggers.length === 0 ? (
+            <p className="text-gray-600">Нет доступных категорий тестирования</p>
           ) : (
-            <div className="space-y-5">
+            <div className="space-y-6">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Тест</label>
-                <select
-                  className="w-full rounded-xl border border-gray-300 px-4 py-3"
-                  value={selectedTestId}
-                  onChange={(event) => {
-                    const nextTestId = event.target.value;
-                    const nextTest = safeTests.find((test) => String(test.id) === String(nextTestId));
-                    setSelectedTestId(nextTestId);
-                    setSelectedTriggerIds(nextTest?.triggers?.[0]?.id ? [String(nextTest.triggers[0].id)] : []);
-                  }}
-                >
-                  {safeTests.map((test) => (
-                    <option key={test.id} value={test.id}>{test.title}</option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Триггеры</label>
-                <div className="space-y-2 rounded-xl border border-gray-300 p-4">
+                <h2 className="text-lg font-semibold text-gray-900 mb-4">
+                  Выберите категории тестирования
+                </h2>
+                <div className="space-y-3 rounded-xl border border-gray-200 bg-gray-50 p-4">
                   {availableTriggers.map((trigger) => {
                     const triggerId = String(trigger.id);
+                    const isSelected = selectedTriggerIds.includes(triggerId);
+
                     return (
-                      <label key={trigger.id} className="flex items-center gap-3">
+                      <label
+                        key={trigger.id}
+                        className={`flex cursor-pointer items-center gap-3 rounded-xl border bg-white px-4 py-3 transition hover:border-green-300 hover:shadow-sm ${
+                          isSelected ? 'border-green-500 ring-2 ring-green-100' : 'border-gray-200'
+                        }`}
+                      >
                         <input
                           type="checkbox"
-                          className="h-4 w-4"
-                          checked={selectedTriggerIds.includes(triggerId)}
+                          className="h-5 w-5 rounded border-gray-300 text-green-600 focus:ring-green-500"
+                          checked={isSelected}
                           onChange={() => {
                             setSelectedTriggerIds((current) =>
                               current.includes(triggerId)
@@ -398,7 +425,7 @@ const StudentDashboard = () => {
                             );
                           }}
                         />
-                        <span>{trigger.name}</span>
+                        <span className="font-medium text-gray-900">{trigger.name}</span>
                       </label>
                     );
                   })}
@@ -407,9 +434,9 @@ const StudentDashboard = () => {
 
               <button
                 type="button"
-                className="px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-xl disabled:bg-gray-300 disabled:cursor-not-allowed"
+                className="w-full px-6 py-3 bg-green-600 hover:bg-green-700 text-white font-semibold rounded-xl shadow-sm transition disabled:bg-gray-300 disabled:cursor-not-allowed"
                 onClick={startSelectedTest}
-                disabled={!selectedTestId || selectedTriggerIds.length === 0}
+                disabled={selectedTriggerIds.length === 0}
               >
                 Начать тест
               </button>
@@ -434,7 +461,7 @@ const StudentDashboard = () => {
     <div className="protected-test-content max-w-4xl mx-auto px-4 py-8">
       <div className="mb-8">
         <div className="flex items-center justify-between gap-4">
-          <h1 className="text-2xl font-bold text-gray-900">Аскердик даярдык</h1>
+          <h1 className="text-2xl font-bold text-gray-900">Тестирование</h1>
           <div className="text-sm text-gray-500">
             {answeredCount} / {safeQuestions.length} вопросов ({progress}%)
           </div>
