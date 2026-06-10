@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
+import { localizeQuestion, useLanguage } from '../context/LanguageContext';
 
 const API_URL = 'http://localhost:8000/api';
 
@@ -9,6 +10,7 @@ const TestResult = () => {
   const { attemptId } = useParams();
   const navigate = useNavigate();
   const { logout } = useAuth();
+  const { language, t } = useLanguage();
   
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -16,16 +18,17 @@ const TestResult = () => {
 
   useEffect(() => {
     fetchResult();
-  }, [attemptId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [attemptId, language]);
 
   const fetchResult = async () => {
     try {
-      const response = await axios.get(`${API_URL}/student/attempts/${attemptId}/result/`);
+      const response = await axios.get(`${API_URL}/student/attempts/${attemptId}/result/?lang=${language}`);
       setResult(response.data);
       setLoading(false);
     } catch (error) {
-      const errorMsg = error.response?.data?.error || 'Ошибка загрузки результата';
-      setError(errorMsg);
+      const errorMsg = error.response?.data?.error || t('Не удалось загрузить результат');
+      setError(t(errorMsg));
       setLoading(false);
     }
   };
@@ -50,17 +53,17 @@ const TestResult = () => {
 
   const getScoreMessage = (score, total) => {
     const percentage = (score / total) * 100;
-    if (percentage >= 80) return 'Отличный результат!';
-    if (percentage >= 60) return 'Хороший результат!';
-    if (percentage >= 40) return 'Удовлетворительно';
-    return 'Попробуйте еще раз';
+    if (percentage >= 80) return t('Отличный результат!');
+    if (percentage >= 60) return t('Хороший результат!');
+    if (percentage >= 40) return t('Удовлетворительно');
+    return t('Попробуйте еще раз');
   };
 
   if (loading) {
     return (
       <div className="loading-spinner">
         <div className="spinner-border text-primary" role="status">
-          <span className="visually-hidden">Загрузка...</span>
+          <span className="visually-hidden">{t('Загрузка...')}</span>
         </div>
       </div>
     );
@@ -86,12 +89,12 @@ const TestResult = () => {
       <div className="result-display">
         <div className="card shadow">
           <div className="card-body p-5">
-            <h2 className="mb-4">Результаты теста</h2>
+            <h2 className="mb-4">{t('Результаты теста')}</h2>
             
             <div className="mb-4">
-              <h4>{attempt.test.title}</h4>
+              <h4>{t(attempt.test.title)}</h4>
               <p className="text-muted">
-                Завершен: {attempt.completed_at ? new Date(attempt.completed_at).toLocaleString() : '-'}
+                {t('Завершен')}: {attempt.completed_at ? new Date(attempt.completed_at).toLocaleString() : '-'}
               </p>
             </div>
 
@@ -117,19 +120,19 @@ const TestResult = () => {
               <div className="col-md-4">
                 <div className="stats-card">
                   <h3>{correct_count}</h3>
-                  <p>Правильных ответов</p>
+                  <p>{t('answers.correct_answers')}</p>
                 </div>
               </div>
               <div className="col-md-4">
                 <div className="stats-card" style={{ background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' }}>
                   <h3>{total_questions - correct_count}</h3>
-                  <p>Неправильных ответов</p>
+                  <p>{t('answers.incorrect_answers')}</p>
                 </div>
               </div>
               <div className="col-md-4">
                 <div className="stats-card" style={{ background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' }}>
                   <h3>{total_questions}</h3>
-                  <p>Всего вопросов</p>
+                  <p>{t('Всего вопросов')}</p>
                 </div>
               </div>
             </div>
@@ -140,30 +143,30 @@ const TestResult = () => {
 
       {attempt.answers && attempt.answers.length > 0 && (
         <div className="dashboard-card mt-4">
-          <h5 className="mb-3">Детальный разбор</h5>
+          <h5 className="mb-3">{t('Детальный разбор')}</h5>
           <div className="table-responsive">
             <table className="table">
               <thead>
                 <tr>
                   <th>#</th>
-                  <th>Вопрос</th>
-                  <th>Ваш ответ</th>
-                  <th>Результат</th>
+                  <th>{t('Вопрос')}</th>
+                  <th>{t('Ваш ответ')}</th>
+                  <th>{t('Результат')}</th>
                 </tr>
               </thead>
               <tbody>
                 {attempt.answers.map((answer, index) => (
                   <tr key={answer.id}>
                     <td>{index + 1}</td>
-                    <td>{answer.question.text.substring(0, 50)}...</td>
+                    <td>{localizeQuestion(answer.question, language).text.substring(0, 50)}...</td>
                     <td>
                       <span className="badge bg-secondary">{answer.selected_option}</span>
                     </td>
                     <td>
                       {answer.is_correct ? (
-                        <span className="badge bg-success">Правильно</span>
+                        <span className="badge bg-success">{t('Правильно')}</span>
                       ) : (
-                        <span className="badge bg-danger">Неправильно</span>
+                        <span className="badge bg-danger">{t('Неправильно')}</span>
                       )}
                     </td>
                   </tr>

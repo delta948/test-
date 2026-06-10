@@ -16,6 +16,7 @@ from datetime import timedelta
 from io import BytesIO
 import os
 import random
+import re
 from .models import QuestionTrigger, Question, Test, Attempt, Answer, StudentProfile, SummaryReport, TestingPeriod
 from .serializers import (
     UserSerializer, RegisterSerializer, CreateTeacherSerializer, CreateStudentSerializer,
@@ -37,6 +38,94 @@ SUMMARY_REPORT_RETENTION = timedelta(days=90)
 
 def get_attempt_expires_at(attempt):
     return attempt.started_at + TEST_DURATION
+
+
+QUESTION_TRANSLATION_DICTIONARY = {
+    'ru_to_ky': {
+        'вопрос': 'суроо',
+        'ответ': 'жооп',
+        'правильный': 'туура',
+        'правильный ответ': 'туура жооп',
+        'тест': 'тест',
+        'военный': 'аскердик',
+        'аскердик': 'аскердик',
+        'закон': 'мыйзам',
+        'управление': 'башкаруу',
+        'командир': 'командир',
+        'приказ': 'буйрук',
+        'устав': 'устав',
+        'безопасность': 'коопсуздук',
+    },
+    'ky_to_ru': {
+        'суроо': 'вопрос',
+        'жооп': 'ответ',
+        'туура': 'правильный',
+        'туура жооп': 'правильный ответ',
+        'тест': 'тест',
+        'аскердик': 'военный',
+        'аскер': 'военный',
+        'мыйзам': 'закон',
+        'башкаруу': 'управление',
+        'командир': 'командир',
+        'буйрук': 'приказ',
+        'устав': 'устав',
+        'коопсуздук': 'безопасность',
+    },
+}
+
+
+def simple_translate_text(value, target_language):
+    text = str(value or '').strip()
+    if not text:
+        return ''
+
+    direction = 'ru_to_ky' if target_language == 'ky' else 'ky_to_ru'
+    dictionary = QUESTION_TRANSLATION_DICTIONARY[direction]
+    lower = text.lower()
+    if lower in dictionary:
+        return dictionary[lower]
+
+    def replace_word(match):
+        word = match.group(0)
+        translated = dictionary.get(word.lower())
+        if not translated:
+            return word
+        if word[:1].isupper():
+            return translated[:1].upper() + translated[1:]
+        return translated
+
+    return re.sub(r'[A-Za-zА-Яа-яЁёӨөҮүҢң]+', replace_word, text)
+
+
+def translate_question_payload(payload):
+    translated = dict(payload or {})
+    for field in ['text', 'option_a', 'option_b', 'option_c', 'option_d']:
+        ru_key = f'{field}_ru'
+        ky_key = f'{field}_ky'
+        kg_key = f'{field}_kg'
+        if field == 'text':
+            ru_alias = 'question_ru'
+            kg_alias = 'question_kg'
+        else:
+            ru_alias = None
+            kg_alias = kg_key
+        base_value = translated.get(field, '')
+        ru_value = translated.get(ru_key, '') or (translated.get(ru_alias, '') if ru_alias else '') or base_value
+        ky_value = translated.get(ky_key, '') or translated.get(kg_alias, '')
+
+        if ru_value and not translated.get(ru_key):
+            translated[ru_key] = ru_value
+        if ru_value and not ky_value:
+            translated[ky_key] = simple_translate_text(ru_value, 'ky')
+        if ky_value and not ru_value:
+            translated[ru_key] = simple_translate_text(ky_value, 'ru')
+        translated[field] = translated.get(ru_key) or translated.get(ky_key) or base_value
+        if field == 'text':
+            translated['question_ru'] = translated.get(ru_key, '')
+            translated['question_kg'] = translated.get(ky_key, '')
+        else:
+            translated[kg_key] = translated.get(ky_key, '')
+    return translated
 
 
 def get_or_create_current_testing_period(teacher):
@@ -609,10 +698,20 @@ class QuestionTriggerQuestionUploadView(APIView):
             for item in items:
                 payload = {
                     'text': item.get('text', ''),
+                    'text_ru': item.get('text_ru') or item.get('question_ru', ''),
+                    'text_ky': item.get('text_ky') or item.get('question_kg', ''),
                     'option_a': item.get('option_a', ''),
+                    'option_a_ru': item.get('option_a_ru', ''),
+                    'option_a_ky': item.get('option_a_ky') or item.get('option_a_kg', ''),
                     'option_b': item.get('option_b', ''),
+                    'option_b_ru': item.get('option_b_ru', ''),
+                    'option_b_ky': item.get('option_b_ky') or item.get('option_b_kg', ''),
                     'option_c': item.get('option_c', ''),
+                    'option_c_ru': item.get('option_c_ru', ''),
+                    'option_c_ky': item.get('option_c_ky') or item.get('option_c_kg', ''),
                     'option_d': item.get('option_d', ''),
+                    'option_d_ru': item.get('option_d_ru', ''),
+                    'option_d_ky': item.get('option_d_ky') or item.get('option_d_kg', ''),
                     'correct_answer': item.get('correct_answer', ''),
                     'trigger_id': trigger.id,
                 }
@@ -653,6 +752,13 @@ class QuestionDetailView(generics.RetrieveUpdateDestroyAPIView):
     
     def get_queryset(self):
         return Question.objects.select_related('trigger', 'created_by')
+
+
+class QuestionTranslateView(APIView):
+    permission_classes = [IsAdminUser]
+
+    def post(self, request):
+        return Response(translate_question_payload(request.data))
 
 
 class TestListCreateView(generics.ListCreateAPIView):
@@ -914,7 +1020,7 @@ class StartAttemptView(APIView):
             attempt.save(update_fields=['question_order'])
             attempt.questions.set(question_ids)
         
-        serializer = AttemptSerializer(attempt)
+        serializer = AttemptSerializer(attempt, context={'request': request})
         return Response({
             'message': 'Попытка начата',
             'attempt': serializer.data,
@@ -942,7 +1048,7 @@ class GetTestQuestionsView(APIView):
         questions = get_attempt_questions(attempt)
         if questions.count() != QUESTIONS_PER_ATTEMPT:
             return Response({'error': 'Недостаточно вопросов для запуска теста'}, status=status.HTTP_400_BAD_REQUEST)
-        serializer = QuestionListSerializer(questions, many=True)
+        serializer = QuestionListSerializer(questions, many=True, context={'request': request})
         
         saved_answers = Answer.objects.filter(attempt=attempt)
         answered_questions = saved_answers.values_list('question_id', flat=True)
@@ -1078,7 +1184,7 @@ class GetTestResultView(APIView):
         except Attempt.DoesNotExist:
             return Response({'error': 'Результат не найден'}, status=status.HTTP_404_NOT_FOUND)
         
-        serializer = AttemptSerializer(attempt)
+        serializer = AttemptSerializer(attempt, context={'request': request})
         return Response({
             'attempt': serializer.data,
             'correct_count': attempt.score,

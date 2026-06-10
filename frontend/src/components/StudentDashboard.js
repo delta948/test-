@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
+import { localizeQuestion, useLanguage } from '../context/LanguageContext';
 import useTestContentProtection from '../hooks/useTestContentProtection';
 
 const API_URL = 'http://localhost:8000/api';
@@ -49,6 +50,7 @@ const formatTimeLeft = (seconds) => {
 
 const StudentDashboard = () => {
   const { user, logout } = useAuth();
+  const { language, t } = useLanguage();
   useTestContentProtection();
   const [tests, setTests] = useState([]);
   const [selectedTriggerIds, setSelectedTriggerIds] = useState([]);
@@ -66,8 +68,8 @@ const StudentDashboard = () => {
   const submittedRef = useRef(false);
 
   const safeQuestions = useMemo(
-    () => (Array.isArray(questions) ? questions : []),
-    [questions]
+    () => (Array.isArray(questions) ? questions.map((question) => normalizeQuestion(localizeQuestion(question, language))) : []),
+    [questions, language]
   );
   const safeTests = useMemo(
     () => (Array.isArray(tests) ? tests : []),
@@ -130,7 +132,7 @@ const StudentDashboard = () => {
 
       if (!loadedTests.length) {
         setQuestions([]);
-        setError('Нет доступных категорий тестирования');
+        setError(t('Нет доступных категорий тестирования'));
         return;
       }
 
@@ -145,7 +147,7 @@ const StudentDashboard = () => {
 
       const newAttemptId = startRes.data?.attempt?.id;
       if (!newAttemptId) {
-        throw new Error('Не удалось создать попытку теста');
+        throw new Error(t('Не удалось создать попытку теста'));
       }
 
       const expiresAt = startRes.data?.expires_at;
@@ -176,29 +178,29 @@ const StudentDashboard = () => {
 
       setSavedAnswerIds(answeredIds);
       setAnswers(selectedAnswers);
-      setQuestions(apiQuestions.map(normalizeQuestion));
+      setQuestions(apiQuestions);
     } catch (err) {
       console.error('Error fetching questions:', err);
       setQuestions([]);
-      setError(
+      const errorMessage =
         err.response?.data?.error ||
-          err.response?.data?.detail ||
-          err.message ||
-          'Ошибка загрузки вопросов'
-      );
+        err.response?.data?.detail ||
+        err.message ||
+        'Ошибка загрузки вопросов';
+      setError(t(errorMessage));
     } finally {
       setLoading(false);
     }
-  }, [user]);
+  }, [t, user]);
 
   const startSelectedTest = async () => {
     if (selectedTriggerIds.length === 0) {
-      setError('Выберите хотя бы одну категорию тестирования');
+      setError(t('Выберите хотя бы одну категорию тестирования'));
       return;
     }
 
     if (!selectedTestForTriggers?.id) {
-      setError('Нет доступного теста для выбранных категорий');
+      setError(t('Нет доступного теста для выбранных категорий'));
       return;
     }
 
@@ -214,7 +216,7 @@ const StudentDashboard = () => {
 
       const newAttemptId = startRes.data?.attempt?.id;
       if (!newAttemptId) {
-        throw new Error('Не удалось создать попытку теста');
+        throw new Error(t('Не удалось создать попытку теста'));
       }
 
       const expiresAt = startRes.data?.expires_at;
@@ -229,7 +231,7 @@ const StudentDashboard = () => {
       setTimeLeftSeconds(Math.max(0, Math.ceil((nextDeadlineMs - Date.now()) / 1000)));
 
       const questionsRes = await axios.get(
-        `${API_URL}/student/attempts/${newAttemptId}/questions/`,
+        `${API_URL}/student/attempts/${newAttemptId}/questions/?lang=${language}`,
         { headers: getAuthHeaders() }
       );
 
@@ -243,16 +245,16 @@ const StudentDashboard = () => {
 
       setSavedAnswerIds(answeredIds);
       setAnswers(selectedAnswers);
-      setQuestions(apiQuestions.map(normalizeQuestion));
+      setQuestions(apiQuestions);
     } catch (err) {
       console.error('Error starting test:', err);
       setQuestions([]);
-      setError(
+      const errorMessage =
         err.response?.data?.error ||
-          err.response?.data?.detail ||
-          err.message ||
-          'Ошибка запуска теста'
-      );
+        err.response?.data?.detail ||
+        err.message ||
+        'Ошибка запуска теста';
+      setError(t(errorMessage));
     } finally {
       setLoading(false);
     }
@@ -289,10 +291,10 @@ const StudentDashboard = () => {
       );
       setSavedAnswerIds((prev) => [...new Set([...(prev || []), Number(questionId)])]);
     } catch (err) {
-      const errorMessage = err.response?.data?.error || err.message || 'Ошибка при сохранении ответа';
-      setError(errorMessage);
+      const errorMessage = err.response?.data?.error || err.message || t('Ошибка при сохранении ответа');
+      setError(t(errorMessage));
 
-      if (errorMessage.includes('Время теста истекло')) {
+      if (errorMessage.includes('Время теста истекло') || errorMessage.includes('Тесттин убактысы бүттү')) {
         completeTest({ timedOut: true });
       }
     }
@@ -305,12 +307,12 @@ const StudentDashboard = () => {
     const answeredEntries = Object.entries(answersRef.current || {});
 
     if (!timedOut && answeredEntries.length < 1) {
-      setError('Ответьте хотя бы на один вопрос, чтобы завершить тест');
+      setError(t('Ответьте хотя бы на один вопрос, чтобы завершить тест'));
       return;
     }
 
     if (!attemptId) {
-      setError('Не найдена активная попытка теста');
+      setError(t('Не найдена активная попытка теста'));
       return;
     }
 
@@ -342,17 +344,17 @@ const StudentDashboard = () => {
       navigate('/login', { replace: true });
     } catch (err) {
       console.error('Error completing test:', err);
-      setError(
+      const errorMessage =
         err.response?.data?.detail ||
-          err.response?.data?.error ||
-          err.message ||
-          'Ошибка при завершении теста'
-      );
+        err.response?.data?.error ||
+        err.message ||
+        'Ошибка при завершении теста';
+      setError(t(errorMessage));
       submittedRef.current = false;
     } finally {
       setSubmitting(false);
     }
-  }, [attemptId, logout, navigate, savedAnswerIds]);
+  }, [attemptId, logout, navigate, savedAnswerIds, t]);
 
   useEffect(() => {
     if (!deadlineMs || loading || submitting) return undefined;
@@ -362,7 +364,7 @@ const StudentDashboard = () => {
       setTimeLeftSeconds(nextTimeLeft);
 
       if (nextTimeLeft <= 0 && !submittedRef.current) {
-        setError('Время вышло. Тест автоматически завершается с текущими ответами.');
+        setError(t('Время вышло. Тест автоматически завершается с текущими ответами.'));
         completeTest({ timedOut: true });
       }
     };
@@ -370,13 +372,13 @@ const StudentDashboard = () => {
     updateTimer();
     const intervalId = window.setInterval(updateTimer, 1000);
     return () => window.clearInterval(intervalId);
-  }, [completeTest, deadlineMs, loading, submitting]);
+  }, [completeTest, deadlineMs, loading, submitting, t]);
 
   if (loading) {
     return (
       <div className="loading-spinner">
         <div className="spinner-modern"></div>
-        <p className="mt-4 text-gray-600 font-medium">Загрузка вопросов...</p>
+        <p className="mt-4 text-gray-600 font-medium">{t('Загрузка вопросов...')}</p>
       </div>
     );
   }
@@ -385,7 +387,7 @@ const StudentDashboard = () => {
     return (
       <div className="max-w-3xl mx-auto px-4 py-10">
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-6">
-          <h1 className="text-2xl font-bold text-gray-900 mb-6">Выбор тестирования</h1>
+          <h1 className="text-2xl font-bold text-gray-900 mb-6">{t('Выбор тестирования')}</h1>
 
           {error && (
             <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl">
@@ -394,12 +396,12 @@ const StudentDashboard = () => {
           )}
 
           {availableTriggers.length === 0 ? (
-            <p className="text-gray-600">Нет доступных категорий тестирования</p>
+            <p className="text-gray-600">{t('Нет доступных категорий тестирования')}</p>
           ) : (
             <div className="space-y-6">
               <div>
                 <h2 className="text-lg font-semibold text-gray-900 mb-4">
-                  Выберите категории тестирования
+                  {t('Выберите категории тестирования')}
                 </h2>
                 <div className="space-y-3 rounded-xl border border-gray-200 bg-gray-50 p-4">
                   {availableTriggers.map((trigger) => {
@@ -425,7 +427,7 @@ const StudentDashboard = () => {
                             );
                           }}
                         />
-                        <span className="font-medium text-gray-900">{trigger.name}</span>
+                        <span className="font-medium text-gray-900">{t(trigger.name)}</span>
                       </label>
                     );
                   })}
@@ -438,7 +440,7 @@ const StudentDashboard = () => {
                 onClick={startSelectedTest}
                 disabled={selectedTriggerIds.length === 0}
               >
-                Начать тест
+                {t('Начать тест')}
               </button>
             </div>
           )}
@@ -461,16 +463,16 @@ const StudentDashboard = () => {
     <div className="protected-test-content max-w-4xl mx-auto px-4 py-8">
       <div className="mb-8">
         <div className="flex items-center justify-between gap-4">
-          <h1 className="text-2xl font-bold text-gray-900">Тестирование</h1>
+          <h1 className="text-2xl font-bold text-gray-900">{t('Тестирование')}</h1>
           <div className="text-sm text-gray-500">
-            {answeredCount} / {safeQuestions.length} вопросов ({progress}%)
+            {answeredCount} / {safeQuestions.length} {t('вопросов')} ({progress}%)
           </div>
         </div>
 
         <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4">
           <div className="flex items-center justify-between">
             <span className="text-sm font-semibold text-red-700 animate-pulse">
-              Обратный отсчет
+              {t('Обратный отсчет')}
             </span>
             <span className="font-mono text-2xl font-bold text-red-700 animate-pulse">
               {formatTimeLeft(timeLeftSeconds)}
@@ -494,7 +496,7 @@ const StudentDashboard = () => {
       {safeQuestions.length === 0 ? (
         <div className="text-center py-16">
           <p className="text-gray-900 font-medium text-lg">
-            {safeTests.length === 0 ? 'Нет доступных тестов' : 'Нет вопросов'}
+            {safeTests.length === 0 ? t('Нет доступных тестов') : t('Нет вопросов')}
           </p>
         </div>
       ) : (
@@ -525,7 +527,7 @@ const StudentDashboard = () => {
                       <div className="space-y-2">
                         {(questionAnswers || []).length === 0 ? (
                           <div className="p-3 rounded-xl bg-yellow-50 border border-yellow-200 text-yellow-800">
-                            Нет вариантов ответа
+                            {t('Нет вариантов ответа')}
                           </div>
                         ) : (
                           (questionAnswers || []).map((answer) => {
@@ -569,7 +571,7 @@ const StudentDashboard = () => {
                   : 'bg-green-500 hover:bg-green-600 text-white'
               }`}
             >
-              {submitting ? 'Завершение...' : 'Завершить тест'}
+              {submitting ? t('Завершение...') : t('Завершить тест')}
             </button>
           </div>
         </>

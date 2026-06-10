@@ -110,10 +110,20 @@ class Question(models.Model):
         (TRIGGER_SENIOR_OFFICER, 'Контрольный срез знаний старшего офицерского состава'),
     ]
     text = models.TextField(verbose_name='Текст вопроса')
+    text_ru = models.TextField(blank=True, default='', verbose_name='Текст вопроса на русском')
+    text_ky = models.TextField(blank=True, default='', verbose_name='Текст вопроса на кыргызском')
     option_a = models.CharField(max_length=255, verbose_name='Вариант A')
+    option_a_ru = models.CharField(max_length=255, blank=True, default='', verbose_name='Вариант A на русском')
+    option_a_ky = models.CharField(max_length=255, blank=True, default='', verbose_name='Вариант A на кыргызском')
     option_b = models.CharField(max_length=255, verbose_name='Вариант B')
+    option_b_ru = models.CharField(max_length=255, blank=True, default='', verbose_name='Вариант B на русском')
+    option_b_ky = models.CharField(max_length=255, blank=True, default='', verbose_name='Вариант B на кыргызском')
     option_c = models.CharField(max_length=255, verbose_name='Вариант C')
+    option_c_ru = models.CharField(max_length=255, blank=True, default='', verbose_name='Вариант C на русском')
+    option_c_ky = models.CharField(max_length=255, blank=True, default='', verbose_name='Вариант C на кыргызском')
     option_d = models.CharField(max_length=255, blank=True, default='', verbose_name='Вариант D')
+    option_d_ru = models.CharField(max_length=255, blank=True, default='', verbose_name='Вариант D на русском')
+    option_d_ky = models.CharField(max_length=255, blank=True, default='', verbose_name='Вариант D на кыргызском')
     
     CORRECT_CHOICES = [
         ('A', 'Вариант A'),

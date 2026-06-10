@@ -7,6 +7,34 @@ from .models import QuestionTrigger, Question, Test, Attempt, Answer, StudentPro
 
 User = get_user_model()
 
+QUESTION_BASE_FIELDS = ['text', 'option_a', 'option_b', 'option_c', 'option_d']
+QUESTION_LANGUAGE_FIELDS = [
+    'text_ru', 'text_ky',
+    'option_a_ru', 'option_a_ky',
+    'option_b_ru', 'option_b_ky',
+    'option_c_ru', 'option_c_ky',
+    'option_d_ru', 'option_d_ky',
+]
+QUESTION_ALIAS_FIELDS = [
+    'question_ru', 'question_kg',
+    'option_a_kg', 'option_b_kg', 'option_c_kg', 'option_d_kg',
+]
+
+
+def localized_question_value(obj, field, language=None):
+    def clean(value):
+        text = str(value or '').strip()
+        if not text or all(char == '?' or char.isspace() for char in text):
+            return ''
+        return value
+
+    language = language if language in ('ru', 'ky') else 'ru'
+    preferred = clean(getattr(obj, f'{field}_{language}', '') or '')
+    fallback_language = 'ky' if language == 'ru' else 'ru'
+    fallback = clean(getattr(obj, f'{field}_{fallback_language}', '') or '')
+    legacy = clean(getattr(obj, field, '') or '')
+    return preferred or fallback or legacy
+
 
 class UserSerializer(serializers.ModelSerializer):
     military_rank = serializers.SerializerMethodField()
@@ -274,39 +302,175 @@ class QuestionSerializer(serializers.ModelSerializer):
         required=True
     )
     trigger = QuestionTriggerSerializer(read_only=True)
+    question_ru = serializers.SerializerMethodField()
+    question_kg = serializers.SerializerMethodField()
+    option_a_kg = serializers.SerializerMethodField()
+    option_b_kg = serializers.SerializerMethodField()
+    option_c_kg = serializers.SerializerMethodField()
+    option_d_kg = serializers.SerializerMethodField()
 
     class Meta:
         model = Question
         fields = [
-            'id', 'text', 'option_a', 'option_b', 'option_c', 'option_d',
+            'id', 'text', 'text_ru', 'text_ky',
+            'option_a', 'option_a_ru', 'option_a_ky',
+            'option_b', 'option_b_ru', 'option_b_ky',
+            'option_c', 'option_c_ru', 'option_c_ky',
+            'option_d', 'option_d_ru', 'option_d_ky',
+            *QUESTION_ALIAS_FIELDS,
             'correct_answer', 'trigger', 'trigger_id', 'created_at'
         ]
-        read_only_fields = ['created_at']
+        read_only_fields = ['created_at', *QUESTION_ALIAS_FIELDS]
+
+    def to_internal_value(self, data):
+        if hasattr(data, 'copy'):
+            data = data.copy()
+        alias_map = {
+            'question_ru': 'text_ru',
+            'question_kg': 'text_ky',
+            'option_a_kg': 'option_a_ky',
+            'option_b_kg': 'option_b_ky',
+            'option_c_kg': 'option_c_ky',
+            'option_d_kg': 'option_d_ky',
+        }
+        for alias, target in alias_map.items():
+            if alias in data and target not in data:
+                data[target] = data[alias]
+        return super().to_internal_value(data)
+
+    def get_question_ru(self, obj):
+        return localized_question_value(obj, 'text', 'ru')
+
+    def get_question_kg(self, obj):
+        return localized_question_value(obj, 'text', 'ky')
+
+    def get_option_a_kg(self, obj):
+        return localized_question_value(obj, 'option_a', 'ky')
+
+    def get_option_b_kg(self, obj):
+        return localized_question_value(obj, 'option_b', 'ky')
+
+    def get_option_c_kg(self, obj):
+        return localized_question_value(obj, 'option_c', 'ky')
+
+    def get_option_d_kg(self, obj):
+        return localized_question_value(obj, 'option_d', 'ky')
+
+    def validate(self, attrs):
+        for field in QUESTION_BASE_FIELDS:
+            field_was_sent = (
+                field in attrs or
+                f'{field}_ru' in attrs or
+                f'{field}_ky' in attrs
+            )
+            if not field_was_sent:
+                continue
+
+            current_value = attrs.get(field, getattr(self.instance, field, '') if self.instance else '')
+            ru_value = attrs.get(f'{field}_ru', getattr(self.instance, f'{field}_ru', '') if self.instance else '')
+            ky_value = attrs.get(f'{field}_ky', getattr(self.instance, f'{field}_ky', '') if self.instance else '')
+            if not current_value:
+                attrs[field] = ru_value or ky_value
+        return attrs
 
 
 class QuestionListSerializer(serializers.ModelSerializer):
     answers = serializers.SerializerMethodField()
+    text = serializers.SerializerMethodField()
+    question_ru = serializers.SerializerMethodField()
+    question_kg = serializers.SerializerMethodField()
+    option_a_kg = serializers.SerializerMethodField()
+    option_b_kg = serializers.SerializerMethodField()
+    option_c_kg = serializers.SerializerMethodField()
+    option_d_kg = serializers.SerializerMethodField()
 
     class Meta:
         model = Question
-        fields = ['id', 'text', 'answers']
+        fields = [
+            'id', 'text', 'text_ru', 'text_ky',
+            'option_a', 'option_a_ru', 'option_a_ky',
+            'option_b', 'option_b_ru', 'option_b_ky',
+            'option_c', 'option_c_ru', 'option_c_ky',
+            'option_d', 'option_d_ru', 'option_d_ky',
+            *QUESTION_ALIAS_FIELDS,
+            'answers',
+        ]
+
+    def get_language(self):
+        request = self.context.get('request')
+        language = request.query_params.get('lang') if request else None
+        return language if language in ('ru', 'ky') else 'ru'
+
+    def get_text(self, obj):
+        return localized_question_value(obj, 'text', self.get_language())
+
+    def get_question_ru(self, obj):
+        return localized_question_value(obj, 'text', 'ru')
+
+    def get_question_kg(self, obj):
+        return localized_question_value(obj, 'text', 'ky')
+
+    def get_option_a_kg(self, obj):
+        return localized_question_value(obj, 'option_a', 'ky')
+
+    def get_option_b_kg(self, obj):
+        return localized_question_value(obj, 'option_b', 'ky')
+
+    def get_option_c_kg(self, obj):
+        return localized_question_value(obj, 'option_c', 'ky')
+
+    def get_option_d_kg(self, obj):
+        return localized_question_value(obj, 'option_d', 'ky')
 
     def get_answers(self, obj):
         # Создаем варианты с оригинальными ключами
+        language = self.get_language()
         options = [
-            {'original_key': 'A', 'text': obj.option_a},
-            {'original_key': 'B', 'text': obj.option_b},
-            {'original_key': 'C', 'text': obj.option_c},
+            {
+                'original_key': 'A',
+                'text': localized_question_value(obj, 'option_a', language),
+                'text_ru': localized_question_value(obj, 'option_a', 'ru'),
+                'text_ky': localized_question_value(obj, 'option_a', 'ky'),
+                'text_kg': localized_question_value(obj, 'option_a', 'ky'),
+            },
+            {
+                'original_key': 'B',
+                'text': localized_question_value(obj, 'option_b', language),
+                'text_ru': localized_question_value(obj, 'option_b', 'ru'),
+                'text_ky': localized_question_value(obj, 'option_b', 'ky'),
+                'text_kg': localized_question_value(obj, 'option_b', 'ky'),
+            },
+            {
+                'original_key': 'C',
+                'text': localized_question_value(obj, 'option_c', language),
+                'text_ru': localized_question_value(obj, 'option_c', 'ru'),
+                'text_ky': localized_question_value(obj, 'option_c', 'ky'),
+                'text_kg': localized_question_value(obj, 'option_c', 'ky'),
+            },
         ]
-        if obj.option_d:
-            options.append({'original_key': 'D', 'text': obj.option_d})
+        option_d = localized_question_value(obj, 'option_d', language)
+        if option_d:
+            options.append({
+                'original_key': 'D',
+                'text': option_d,
+                'text_ru': localized_question_value(obj, 'option_d', 'ru'),
+                'text_ky': localized_question_value(obj, 'option_d', 'ky'),
+                'text_kg': localized_question_value(obj, 'option_d', 'ky'),
+            })
         # Перемешиваем варианты
         random.shuffle(options)
         
         # Возвращаем с фиксированными ключами для отображения (A, B, C)
         # но с оригинальными ключами для отправки на бэкенд
         return [
-            {'key': chr(65 + index), 'text': option['text'], 'original_key': option['original_key']}
+            {
+                'key': chr(65 + index),
+                'text': option['text'],
+                'text_ru': option['text_ru'],
+                'text_ky': option['text_ky'],
+                'text_kg': option['text_kg'],
+                'original_key': option['original_key'],
+            }
             for index, option in enumerate(options)
         ]
 
@@ -497,7 +661,7 @@ class AttemptListSerializer(serializers.ModelSerializer):
 
 class SubmitAnswerSerializer(serializers.Serializer):
     question_id = serializers.IntegerField()
-    selected_option = serializers.ChoiceField(choices=[('A', 'A'), ('B', 'B'), ('C', 'C')])
+    selected_option = serializers.ChoiceField(choices=[('A', 'A'), ('B', 'B'), ('C', 'C'), ('D', 'D')])
     
     def validate_question_id(self, value):
         try:

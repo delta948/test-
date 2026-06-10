@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
+import { localizeField, useLanguage } from '../context/LanguageContext';
 
 const API_URL = 'http://localhost:8000/api';
 
@@ -66,8 +67,126 @@ const emptyStudentForm = {
   password: ''
 };
 
+const emptyQuestionForm = (triggerId = '') => ({
+  text: '',
+  text_ru: '',
+  text_ky: '',
+  option_a: '',
+  option_a_ru: '',
+  option_a_ky: '',
+  option_b: '',
+  option_b_ru: '',
+  option_b_ky: '',
+  option_c: '',
+  option_c_ru: '',
+  option_c_ky: '',
+  option_d: '',
+  option_d_ru: '',
+  option_d_ky: '',
+  correct_answer: 'A',
+  trigger_id: triggerId
+});
+
+const bilingualFields = ['text', 'option_a', 'option_b', 'option_c', 'option_d'];
+
+const translationDictionary = {
+  ru: {
+    'суроо': 'вопрос',
+    'жооп': 'ответ',
+    'туура': 'правильный',
+    'туура жооп': 'правильный ответ',
+    'тест': 'тест',
+    'аскер': 'военный',
+    'мыйзам': 'закон',
+    'башкаруу': 'управление'
+  },
+  ky: {
+    'вопрос': 'суроо',
+    'ответ': 'жооп',
+    'правильный': 'туура',
+    'правильный ответ': 'туура жооп',
+    'тест': 'тест',
+    'военный': 'аскердик',
+    'закон': 'мыйзам',
+    'управление': 'башкаруу'
+  }
+};
+
+const simpleTranslate = (value, targetLanguage) => {
+  const text = String(value || '').trim();
+  if (!text) return '';
+  const dictionary = translationDictionary[targetLanguage] || {};
+  const lower = text.toLowerCase();
+  if (dictionary[lower]) return dictionary[lower];
+
+  return text.replace(/[А-Яа-яЁёӨөҮүҢң]+/g, (word) => {
+    const translated = dictionary[word.toLowerCase()];
+    if (!translated) return word;
+    return word[0] === word[0]?.toUpperCase()
+      ? translated.charAt(0).toUpperCase() + translated.slice(1)
+      : translated;
+  });
+};
+
+const normalizeQuestionPayload = (question) => {
+  const payload = { ...question };
+  bilingualFields.forEach((field) => {
+    const ruValue = payload[`${field}_ru`] || '';
+    const kyValue = payload[`${field}_ky`] || payload[`${field}_kg`] || '';
+    payload[field] = payload[field] || ruValue || kyValue;
+    if (!payload[`${field}_ru`] && payload[field]) {
+      payload[`${field}_ru`] = payload[field];
+    }
+    if (kyValue) {
+      payload[`${field}_ky`] = kyValue;
+      payload[`${field}_kg`] = kyValue;
+    }
+  });
+  payload.question_ru = payload.text_ru || payload.text || '';
+  payload.question_kg = payload.text_ky || payload.text_kg || '';
+  return payload;
+};
+
+const hasRequiredQuestionContent = (question) => (
+  ['text', 'option_a', 'option_b', 'option_c'].every((field) => {
+    const ruValue = String(question[`${field}_ru`] || question[field] || '').trim();
+    const kyValue = String(question[`${field}_ky`] || '').trim();
+    return ruValue || kyValue;
+  })
+);
+
+const autoTranslateQuestionLocally = (question) => {
+  const next = { ...question };
+  bilingualFields.forEach((field) => {
+    const ruKey = `${field}_ru`;
+    const kyKey = `${field}_ky`;
+    if (!next[ruKey] && next[field]) {
+      next[ruKey] = next[field];
+    }
+    if (next[ruKey] && !next[kyKey]) {
+      next[kyKey] = simpleTranslate(next[ruKey], 'ky');
+    }
+    if (next[kyKey] && !next[ruKey]) {
+      next[ruKey] = simpleTranslate(next[kyKey], 'ru');
+    }
+    next[field] = next[ruKey] || next[kyKey] || next[field] || '';
+  });
+  return next;
+};
+
+const autoTranslateQuestion = async (question) => {
+  try {
+    const response = await axios.post(`${API_URL}/questions/translate/`, normalizeQuestionPayload(question));
+    return response.data;
+  } catch (error) {
+    console.error('Error translating question:', error);
+    return autoTranslateQuestionLocally(question);
+  }
+};
+
 const TeacherDashboard = () => {
   const { user } = useAuth();
+  const { language, t } = useLanguage();
   const [questions, setQuestions] = useState([]);
   const [triggers, setTriggers] = useState([]);
   const [tests, setTests] = useState([]);
@@ -82,15 +201,7 @@ const TeacherDashboard = () => {
   const [activeTab, setActiveTab] = useState('results');
   const [isMainTeacher, setIsMainTeacher] = useState(false);
   
-  const [newQuestion, setNewQuestion] = useState({
-    text: '',
-    option_a: '',
-    option_b: '',
-    option_c: '',
-    option_d: '',
-    correct_answer: 'A',
-    trigger_id: ''
-  });
+  const [newQuestion, setNewQuestion] = useState(emptyQuestionForm());
   const [questionManagerSearch, setQuestionManagerSearch] = useState('');
   const [questionManagerTriggerFilter, setQuestionManagerTriggerFilter] = useState('');
   const [questionManagerAnswerFilter, setQuestionManagerAnswerFilter] = useState('');
@@ -100,6 +211,7 @@ const TeacherDashboard = () => {
   const [selectedQuestionIds, setSelectedQuestionIds] = useState([]);
   const [questionDrawer, setQuestionDrawer] = useState(null);
   const [questionPreview, setQuestionPreview] = useState(false);
+  const [editingQuestionId, setEditingQuestionId] = useState(null);
   const [bulkMoveTriggerId, setBulkMoveTriggerId] = useState('');
   const [testSearch, setTestSearch] = useState('');
   const [testStatusFilter, setTestStatusFilter] = useState('all');
@@ -138,14 +250,7 @@ const TeacherDashboard = () => {
   const [triggerNotice, setTriggerNotice] = useState('');
   const [triggerDrawer, setTriggerDrawer] = useState(null);
   const [triggerQuestionSearch, setTriggerQuestionSearch] = useState('');
-  const [drawerQuestionForm, setDrawerQuestionForm] = useState({
-    text: '',
-    option_a: '',
-    option_b: '',
-    option_c: '',
-    option_d: '',
-    correct_answer: 'A'
-  });
+  const [drawerQuestionForm, setDrawerQuestionForm] = useState(emptyQuestionForm());
   const [bulkQuestionsText, setBulkQuestionsText] = useState('');
   
   const [newTeacher, setNewTeacher] = useState({
@@ -237,17 +342,19 @@ const TeacherDashboard = () => {
       alert('Выберите триггер для вопроса');
       return;
     }
+    if (!hasRequiredQuestionContent(newQuestion)) {
+      alert('Заполните текст вопроса и варианты A, B, C хотя бы на одном языке');
+      return;
+    }
     try {
-      await axios.post(`${API_URL}/questions/`, newQuestion);
-      setNewQuestion({
-        text: '',
-        option_a: '',
-        option_b: '',
-        option_c: '',
-        option_d: '',
-        correct_answer: 'A',
-        trigger_id: triggers[0]?.id || ''
-      });
+      const payload = normalizeQuestionPayload(newQuestion);
+      if (editingQuestionId) {
+        await axios.patch(`${API_URL}/questions/${editingQuestionId}/`, payload);
+      } else {
+        await axios.post(`${API_URL}/questions/`, payload);
+      }
+      setNewQuestion(emptyQuestionForm(triggers[0]?.id || ''));
+      setEditingQuestionId(null);
       localStorage.removeItem('questionDraft');
       fetchData();
     } catch (error) {
@@ -282,44 +389,62 @@ const TeacherDashboard = () => {
   }, [newQuestion]);
 
   const clearQuestionForm = () => {
-    setNewQuestion({
-      text: '',
-      option_a: '',
-      option_b: '',
-      option_c: '',
-      option_d: '',
-      correct_answer: 'A',
-      trigger_id: triggers[0]?.id || ''
-    });
+    setNewQuestion(emptyQuestionForm(triggers[0]?.id || ''));
+    setEditingQuestionId(null);
     setQuestionPreview(false);
     localStorage.removeItem('questionDraft');
   };
 
-  const copyQuestion = (question) => {
+  const handleAutoTranslateNewQuestion = async () => {
+    setNewQuestion(await autoTranslateQuestion(newQuestion));
+  };
+
+  const handleAutoTranslateDrawerQuestion = async () => {
+    setDrawerQuestionForm(await autoTranslateQuestion(drawerQuestionForm));
+  };
+
+  const fillQuestionForm = (question) => {
     setNewQuestion({
+      ...emptyQuestionForm(question.trigger?.id || question.trigger_id || ''),
       text: question.text || '',
+      text_ru: question.text_ru || question.text || '',
+      text_ky: question.text_ky || question.question_kg || '',
       option_a: question.option_a || '',
+      option_a_ru: question.option_a_ru || question.option_a || '',
+      option_a_ky: question.option_a_ky || question.option_a_kg || '',
       option_b: question.option_b || '',
+      option_b_ru: question.option_b_ru || question.option_b || '',
+      option_b_ky: question.option_b_ky || question.option_b_kg || '',
       option_c: question.option_c || '',
+      option_c_ru: question.option_c_ru || question.option_c || '',
+      option_c_ky: question.option_c_ky || question.option_c_kg || '',
       option_d: question.option_d || '',
-      correct_answer: question.correct_answer || 'A',
-      trigger_id: question.trigger?.id || question.trigger_id || ''
+      option_d_ru: question.option_d_ru || question.option_d || '',
+      option_d_ky: question.option_d_ky || question.option_d_kg || '',
+      correct_answer: question.correct_answer || 'A'
     });
+  };
+
+  const startEditQuestion = (question) => {
+    fillQuestionForm(question);
+    setEditingQuestionId(question.id);
+    setActiveTab('questions');
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const copyQuestion = (question) => {
+    fillQuestionForm(question);
+    setEditingQuestionId(null);
     window.scrollTo({ top: 0, behavior: 'smooth' });
   };
 
   const moveQuestionToTrigger = async (question, triggerId) => {
     if (!triggerId) return;
     try {
-      await axios.patch(`${API_URL}/questions/${question.id}/`, {
-        text: question.text,
-        option_a: question.option_a,
-        option_b: question.option_b,
-        option_c: question.option_c,
-        option_d: question.option_d || '',
-        correct_answer: question.correct_answer,
+      await axios.patch(`${API_URL}/questions/${question.id}/`, normalizeQuestionPayload({
+        ...question,
         trigger_id: triggerId
-      });
+      }));
       fetchData();
     } catch (error) {
       console.error('Error moving question:', error);
@@ -613,7 +738,7 @@ const TeacherDashboard = () => {
     setTriggerNotice('');
 
     if (!newTrigger.name.trim() || !newTrigger.slug.trim()) {
-      setTriggerNotice('Заполните название и код триггера');
+      setTriggerNotice('triggers.notice_required');
       return;
     }
 
@@ -625,11 +750,11 @@ const TeacherDashboard = () => {
         description: newTrigger.description.trim()
       });
       setNewTrigger({ name: '', slug: '', description: '', is_active: true });
-      setTriggerNotice('Триггер успешно сохранён');
+      setTriggerNotice('triggers.notice_saved');
       fetchData();
     } catch (error) {
       console.error('Error creating trigger:', error);
-      setTriggerNotice(error.response?.data?.detail || error.response?.data?.error || 'Ошибка создания триггера');
+      setTriggerNotice(error.response?.data?.detail || error.response?.data?.error || 'triggers.notice_create_error');
     }
   };
 
@@ -755,34 +880,24 @@ const TeacherDashboard = () => {
   const openTriggerQuestions = (trigger) => {
     setTriggerDrawer(trigger);
     setTriggerQuestionSearch('');
-    setDrawerQuestionForm({
-      text: '',
-      option_a: '',
-      option_b: '',
-      option_c: '',
-      option_d: '',
-      correct_answer: 'A'
-    });
+    setDrawerQuestionForm(emptyQuestionForm());
     setBulkQuestionsText('');
   };
 
   const handleCreateDrawerQuestion = async (e) => {
     e.preventDefault();
     if (!triggerDrawer) return;
+    if (!hasRequiredQuestionContent(drawerQuestionForm)) {
+      alert('Заполните текст вопроса и варианты A, B, C хотя бы на одном языке');
+      return;
+    }
 
     try {
       await axios.post(`${API_URL}/questions/`, {
-        ...drawerQuestionForm,
+        ...normalizeQuestionPayload(drawerQuestionForm),
         trigger_id: triggerDrawer.id
       });
-      setDrawerQuestionForm({
-        text: '',
-        option_a: '',
-        option_b: '',
-        option_c: '',
-        option_d: '',
-        correct_answer: 'A'
-      });
+      setDrawerQuestionForm(emptyQuestionForm());
       fetchData();
     } catch (error) {
       console.error('Error creating drawer question:', error);
@@ -901,7 +1016,7 @@ const TeacherDashboard = () => {
       selectedQuestions,
       savedAt: new Date().toISOString()
     }));
-    alert('Черновик сохранён');
+    alert(t('tests.draft_saved'));
   };
 
   const renderCreateTestForm = () => {
@@ -918,17 +1033,17 @@ const TeacherDashboard = () => {
       hasAutoQuestions ? selectedTriggerQuestionTotal >= 100 : selectedQuestions.length === 100
     );
     const readinessText = isReady
-      ? 'Готов к созданию'
+      ? t('tests.ready_to_create')
       : !newTest.title.trim()
-        ? 'Введите название теста'
+        ? t('tests.enter_title')
         : hasAutoQuestions
-          ? `Недостаточно вопросов: ${selectedTriggerQuestionTotal} / 100`
-          : `Выберите ровно 100 вопросов`;
+          ? t('tests.not_enough_questions', { count: selectedTriggerQuestionTotal })
+          : t('tests.choose_exactly_100');
     const stepItems = [
-      { id: 1, title: 'Название теста' },
-      { id: 2, title: 'Выбор триггеров' },
-      { id: 3, title: 'Вопросы' },
-      { id: 4, title: 'Готово' }
+      { id: 1, title: t('tests.step_title') },
+      { id: 2, title: t('tests.step_triggers') },
+      { id: 3, title: t('tests.step_questions') },
+      { id: 4, title: t('tests.step_done') }
     ];
     const baseQuota = selectedTriggers.length ? Math.floor(100 / selectedTriggers.length) : 0;
     const remainder = selectedTriggers.length ? 100 % selectedTriggers.length : 0;
@@ -990,11 +1105,11 @@ const TeacherDashboard = () => {
             <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
               <div className="mb-4 flex items-center justify-between gap-3">
                 <div>
-                  <h5 className="text-lg font-semibold text-gray-900">Шаг 1. Название теста</h5>
-                  <p className="text-sm text-gray-500">Короткое и понятное название поможет быстро найти тест в списке.</p>
+                  <h5 className="text-lg font-semibold text-gray-900">{t('tests.step1_title')}</h5>
+                  <p className="text-sm text-gray-500">{t('tests.step1_hint')}</p>
                 </div>
                 <button type="button" className="text-sm font-semibold text-green-700" onClick={() => setCreateTestStep(2)}>
-                  Далее
+                  {t('common.next')}
                 </button>
               </div>
               <input
@@ -1003,7 +1118,7 @@ const TeacherDashboard = () => {
                 value={newTest.title}
                 onChange={(e) => setNewTest({...newTest, title: e.target.value})}
                 required
-                placeholder="Например: Контрольный тест по теме 1"
+                placeholder={t('tests.example_title_placeholder')}
               />
               <div className="mt-5 flex justify-end">
                 <button
@@ -1011,7 +1126,7 @@ const TeacherDashboard = () => {
                   className="rounded-lg bg-green-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-green-700"
                   onClick={() => setCreateTestStep(2)}
                 >
-                  Перейти к триггерам
+                  {t('tests.go_to_triggers')}
                 </button>
               </div>
             </section>
@@ -1021,11 +1136,11 @@ const TeacherDashboard = () => {
             <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
               <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
                 <div>
-                  <h5 className="text-lg font-semibold text-gray-900">Шаг 2. Выбор триггеров</h5>
-                  <p className="text-sm text-gray-500">Если выбрать триггеры, вопросы будут набраны автоматически.</p>
+                  <h5 className="text-lg font-semibold text-gray-900">{t('tests.step2_title')}</h5>
+                  <p className="text-sm text-gray-500">{t('tests.step2_hint')}</p>
                 </div>
                 <div className="rounded-lg bg-gray-50 px-3 py-2 text-sm font-semibold text-gray-700">
-                  Всего вопросов: {selectedTriggerQuestionTotal}
+                  {t('questions.total_with_count', { count: selectedTriggerQuestionTotal })}
                 </div>
               </div>
 
@@ -1060,11 +1175,11 @@ const TeacherDashboard = () => {
                           </svg>
                         </span>
                         <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-gray-700 shadow-sm">
-                          {trigger.question_count || 0} вопросов
+                          {t('questions.count_label', { count: trigger.question_count || 0 })}
                         </span>
                       </div>
                       <h6 className="mb-1 text-base font-semibold text-gray-900">{trigger.name}</h6>
-                      <p className="line-clamp-2 text-sm text-gray-500">{trigger.description || trigger.slug || 'Категория вопросов'}</p>
+                      <p className="line-clamp-2 text-sm text-gray-500">{trigger.description || trigger.slug || t('questions.category')}</p>
                     </button>
                   );
                 })}
@@ -1072,12 +1187,12 @@ const TeacherDashboard = () => {
 
               {hasAutoQuestions && (
                 <div className="mt-4 rounded-xl border border-green-100 bg-green-50 p-4">
-                  <p className="text-sm font-semibold text-green-800">Автоматический набор вопросов</p>
+                  <p className="text-sm font-semibold text-green-800">{t('questions.auto_set')}</p>
                   <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
                     {triggerAllocation.map((trigger) => (
                       <div key={trigger.id} className="flex items-center justify-between rounded-lg bg-white px-3 py-2 text-sm">
                         <span className="font-medium text-gray-700">{trigger.name}</span>
-                        <span className="font-semibold text-green-700">{trigger.take} из {trigger.question_count || 0}</span>
+                        <span className="font-semibold text-green-700">{t('questions.from_count', { take: trigger.take, total: trigger.question_count || 0 })}</span>
                       </div>
                     ))}
                   </div>
@@ -1089,14 +1204,14 @@ const TeacherDashboard = () => {
                   className="rounded-lg border border-gray-200 bg-white px-5 py-2.5 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50"
                   onClick={() => setCreateTestStep(1)}
                 >
-                  Назад
+                  {t('common.back')}
                 </button>
                 <button
                   type="button"
                   className="rounded-lg bg-green-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-green-700"
                   onClick={() => setCreateTestStep(3)}
                 >
-                  Перейти к вопросам
+                  {t('tests.go_to_questions')}
                 </button>
               </div>
             </section>
@@ -1106,9 +1221,9 @@ const TeacherDashboard = () => {
             <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
               <div className="mb-4 flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
                 <div>
-                  <h5 className="text-lg font-semibold text-gray-900">Шаг 3. Настройка вопросов</h5>
+                  <h5 className="text-lg font-semibold text-gray-900">{t('tests.step3_title')}</h5>
                   <p className="text-sm text-gray-500">
-                    При ручном выборе нужно отметить ровно 100 вопросов. При выборе триггеров список доступен для просмотра.
+                    {t('tests.step3_hint')}
                   </p>
                 </div>
                 <div className={`rounded-lg px-3 py-2 text-sm font-semibold ${
@@ -1127,7 +1242,7 @@ const TeacherDashboard = () => {
                     setQuestionSearch(e.target.value);
                     setQuestionPage(1);
                   }}
-                  placeholder="Поиск по тексту вопроса"
+                  placeholder={t('questions.search_by_text')}
                 />
                 <select
                   className="input-modern"
@@ -1137,7 +1252,7 @@ const TeacherDashboard = () => {
                     setQuestionPage(1);
                   }}
                 >
-                  <option value="">Все триггеры</option>
+                  <option value="">{t('triggers.all')}</option>
                   {(triggers || []).map((trigger) => (
                     <option key={trigger.id} value={trigger.id}>{trigger.name}</option>
                   ))}
@@ -1154,7 +1269,7 @@ const TeacherDashboard = () => {
                   }}
                   disabled={hasAutoQuestions || filteredQuestions.length === 0}
                 >
-                  Выбрать все
+                  {t('common.choose_all')}
                 </button>
                 <button
                   type="button"
@@ -1165,20 +1280,20 @@ const TeacherDashboard = () => {
                   }}
                   disabled={hasAutoQuestions || filteredQuestions.length === 0}
                 >
-                  Случайные 100
+                  {t('questions.random_100')}
                 </button>
                 <button
                   type="button"
                   className="rounded-lg border border-red-100 bg-red-50 px-4 py-2 text-sm font-semibold text-red-700 hover:bg-red-100"
                   onClick={clearSelection}
                 >
-                  Снять выделение
+                  {t('common.clear_selection')}
                 </button>
               </div>
 
               <div className="space-y-2">
                 {pagedQuestions.map((question, index) => {
-                  const triggerName = question.trigger?.name || (triggers || []).find((trigger) => String(trigger.id) === getQuestionTriggerId(question))?.name || 'Без категории';
+                  const triggerName = question.trigger?.name || (triggers || []).find((trigger) => String(trigger.id) === getQuestionTriggerId(question))?.name || t('questions.no_category');
                   return (
                     <label
                       key={question.id}
@@ -1217,7 +1332,7 @@ const TeacherDashboard = () => {
               </div>
 
               <div className="mt-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <p className="text-sm text-gray-500">Показано {pagedQuestions.length} из {filteredQuestions.length}</p>
+                <p className="text-sm text-gray-500">{t('common.shown_from', { shown: pagedQuestions.length, total: filteredQuestions.length })}</p>
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
@@ -1225,7 +1340,7 @@ const TeacherDashboard = () => {
                     onClick={() => setQuestionPage((page) => Math.max(1, page - 1))}
                     disabled={safePage <= 1}
                   >
-                    Назад
+                    {t('common.back')}
                   </button>
                   <span className="text-sm font-semibold text-gray-700">{safePage} / {totalPages}</span>
                   <button
@@ -1234,7 +1349,7 @@ const TeacherDashboard = () => {
                     onClick={() => setQuestionPage((page) => Math.min(totalPages, page + 1))}
                     disabled={safePage >= totalPages}
                   >
-                    Далее
+                    {t('common.next')}
                   </button>
                 </div>
               </div>
@@ -1244,14 +1359,14 @@ const TeacherDashboard = () => {
                   className="rounded-lg border border-gray-200 bg-white px-5 py-2.5 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50"
                   onClick={() => setCreateTestStep(2)}
                 >
-                  Назад
+                  {t('common.back')}
                 </button>
                 <button
                   type="button"
                   className="rounded-lg bg-green-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-green-700"
                   onClick={() => setCreateTestStep(4)}
                 >
-                  Проверить и создать
+                  {t('tests.review_and_create')}
                 </button>
               </div>
             </section>
@@ -1260,26 +1375,26 @@ const TeacherDashboard = () => {
             {createTestStep === 4 && (
               <section className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
                 <div className="mb-5">
-                  <h5 className="text-lg font-semibold text-gray-900">Шаг 4. Готово</h5>
-                  <p className="text-sm text-gray-500">Проверьте параметры теста перед созданием.</p>
+                  <h5 className="text-lg font-semibold text-gray-900">{t('tests.step4_title')}</h5>
+                  <p className="text-sm text-gray-500">{t('tests.step4_hint')}</p>
                 </div>
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
                   <div className="rounded-xl bg-gray-50 p-4">
-                    <p className="text-xs font-semibold uppercase text-gray-500">Название</p>
-                    <p className="mt-2 text-sm font-bold text-gray-900">{newTest.title || 'Не указано'}</p>
+                    <p className="text-xs font-semibold uppercase text-gray-500">{t('tests.title')}</p>
+                    <p className="mt-2 text-sm font-bold text-gray-900">{newTest.title || t('common.not_specified')}</p>
                   </div>
                   <div className="rounded-xl bg-gray-50 p-4">
-                    <p className="text-xs font-semibold uppercase text-gray-500">Вопросы</p>
+                    <p className="text-xs font-semibold uppercase text-gray-500">{t('questions.questions')}</p>
                     <p className="mt-2 text-2xl font-bold text-gray-900">{autoQuestionCount} / 100</p>
                   </div>
                   <div className="rounded-xl bg-gray-50 p-4">
-                    <p className="text-xs font-semibold uppercase text-gray-500">Триггеры</p>
+                    <p className="text-xs font-semibold uppercase text-gray-500">{t('triggers.triggers')}</p>
                     <p className="mt-2 text-2xl font-bold text-gray-900">{selectedTriggerIds.length}</p>
                   </div>
                 </div>
                 {triggerAllocation.length > 0 && (
                   <div className="mt-4 rounded-xl border border-green-100 bg-green-50 p-4">
-                    <p className="text-sm font-semibold text-green-800">Распределение вопросов</p>
+                    <p className="text-sm font-semibold text-green-800">{t('questions.distribution')}</p>
                     <div className="mt-2 space-y-2">
                       {triggerAllocation.map((trigger) => (
                         <div key={trigger.id} className="flex items-center justify-between rounded-lg bg-white px-3 py-2 text-sm">
@@ -1296,14 +1411,14 @@ const TeacherDashboard = () => {
                     className="rounded-lg border border-gray-200 bg-white px-5 py-2.5 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50"
                     onClick={() => setCreateTestStep(3)}
                   >
-                    Назад
+                    {t('common.back')}
                   </button>
                   <button
                     type="submit"
                     className="rounded-xl bg-green-600 px-6 py-3 text-base font-bold text-white shadow-lg hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
                     disabled={!isReady}
                   >
-                    Создать тест
+                    {t('tests.create')}
                   </button>
                 </div>
               </section>
@@ -1312,25 +1427,25 @@ const TeacherDashboard = () => {
 
           <aside className="lg:sticky lg:top-4 lg:self-start">
             <div className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-              <h5 className="text-lg font-semibold text-gray-900">Предпросмотр теста</h5>
+              <h5 className="text-lg font-semibold text-gray-900">{t('tests.preview_title')}</h5>
               <div className="mt-4 space-y-4">
                 <div>
-                  <p className="text-xs font-semibold uppercase text-gray-500">Название</p>
-                  <p className="mt-1 text-sm font-semibold text-gray-900">{newTest.title || 'Не указано'}</p>
+                  <p className="text-xs font-semibold uppercase text-gray-500">{t('tests.title')}</p>
+                  <p className="mt-1 text-sm font-semibold text-gray-900">{newTest.title || t('common.not_specified')}</p>
                 </div>
                 <div>
-                  <p className="text-xs font-semibold uppercase text-gray-500">Выбранные триггеры</p>
+                  <p className="text-xs font-semibold uppercase text-gray-500">{t('triggers.selected')}</p>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {selectedTriggers.length ? selectedTriggers.map((trigger) => (
                       <span key={trigger.id} className="rounded-full bg-green-50 px-2.5 py-1 text-xs font-semibold text-green-700">
                         {trigger.name}
                       </span>
-                    )) : <span className="text-sm text-gray-500">Ручной выбор вопросов</span>}
+                    )) : <span className="text-sm text-gray-500">{t('questions.manual_selection')}</span>}
                   </div>
                 </div>
                 <div className="rounded-xl bg-gray-50 p-4">
                   <div className="flex items-center justify-between text-sm">
-                    <span className="font-medium text-gray-600">Выбрано вопросов</span>
+                    <span className="font-medium text-gray-600">{t('questions.selected_count')}</span>
                     <span className="font-bold text-gray-900">{autoQuestionCount} / 100</span>
                   </div>
                   <div className="mt-3 h-2 overflow-hidden rounded-full bg-gray-200">
@@ -1342,13 +1457,13 @@ const TeacherDashboard = () => {
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="rounded-xl border border-gray-200 p-3">
-                    <p className="text-xs text-gray-500">Триггеров</p>
+                    <p className="text-xs text-gray-500">{t('triggers.count_label')}</p>
                     <p className="text-xl font-bold text-gray-900">{selectedTriggerIds.length}</p>
                   </div>
                   <div className="rounded-xl border border-gray-200 p-3">
-                    <p className="text-xs text-gray-500">Статус</p>
+                    <p className="text-xs text-gray-500">{t('common.status')}</p>
                     <p className={`text-sm font-bold ${isReady ? 'text-green-700' : 'text-yellow-700'}`}>
-                      {isReady ? 'Готово' : 'Не готово'}
+                      {isReady ? t('common.ready') : t('common.not_ready')}
                     </p>
                   </div>
                 </div>
@@ -1357,14 +1472,14 @@ const TeacherDashboard = () => {
                   className="w-full rounded-xl bg-green-600 px-5 py-4 text-base font-bold text-white shadow-lg transition-all hover:bg-green-700 disabled:cursor-not-allowed disabled:opacity-50"
                   disabled={!isReady}
                 >
-                  Создать тест
+                  {t('tests.create')}
                 </button>
                 <button
                   type="button"
                   className="w-full rounded-xl border border-gray-200 bg-white px-5 py-3 text-sm font-bold text-gray-700 shadow-sm hover:bg-gray-50"
                   onClick={saveTestDraft}
                 >
-                  Сохранить черновик
+                  {t('common.save_draft')}
                 </button>
               </div>
             </div>
@@ -1453,21 +1568,21 @@ const TeacherDashboard = () => {
           </style>
         </head>
         <body>
-          <h1>Тет тудента</h1>
-          <p><strong>Студент:</strong> ${escapeHtml(studentName)}</p>
-          <p><strong>Логин:</strong> ${escapeHtml(detail?.student?.username || '-')}</p>
-          <p><strong>Тет:</strong> ${escapeHtml(testTitle)}</p>
-          <p><strong>Дата сдачи:</strong> ${escapeHtml(completedAt)}</p>
-          <p><strong>Результат:</strong> ${escapeHtml(detail?.correct_count || 0)} / ${escapeHtml(detail?.total_questions || questionsForExport.length)}</p>
+          <h1>${escapeHtml(t('export.student_test'))}</h1>
+          <p><strong>${escapeHtml(t('common.student'))}:</strong> ${escapeHtml(studentName)}</p>
+          <p><strong>${escapeHtml(t('login.username'))}:</strong> ${escapeHtml(detail?.student?.username || '-')}</p>
+          <p><strong>${escapeHtml(t('tests.test'))}:</strong> ${escapeHtml(testTitle)}</p>
+          <p><strong>${escapeHtml(t('results.submit_date'))}:</strong> ${escapeHtml(completedAt)}</p>
+          <p><strong>${escapeHtml(t('results.result'))}:</strong> ${escapeHtml(detail?.correct_count || 0)} / ${escapeHtml(detail?.total_questions || questionsForExport.length)}</p>
           <table>
             <thead>
               <tr>
                 <th>№</th>
-                <th>Вопро</th>
-                <th>Варианты</th>
-                <th>Ответ тудента</th>
-                <th>Правильный ответ</th>
-                <th>Стату</th>
+                <th>${escapeHtml(t('questions.question'))}</th>
+                <th>${escapeHtml(t('answers.options'))}</th>
+                <th>${escapeHtml(t('answers.student_answer'))}</th>
+                <th>${escapeHtml(t('answers.correct_answer'))}</th>
+                <th>${escapeHtml(t('common.status'))}</th>
               </tr>
             </thead>
             <tbody>${rows}</tbody>
@@ -1624,8 +1739,8 @@ const TeacherDashboard = () => {
   return (
     <div className="max-w-6xl mx-auto animate-fade-in">
       <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900">Панель учителя</h1>
-        <p className="text-gray-500 mt-1">Управляйте тестами и просматривайте результаты учеников</p>
+        <h1 className="text-3xl font-bold text-gray-900">{t('teacher.dashboard.title')}</h1>
+        <p className="text-gray-500 mt-1">{t('teacher.dashboard.subtitle')}</p>
       </div>
 
       {error && (
@@ -1643,7 +1758,7 @@ const TeacherDashboard = () => {
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
             </svg>
-            Результаты
+            {t('results.results')}
           </span>
         </button>
         <button
@@ -1654,14 +1769,14 @@ const TeacherDashboard = () => {
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 4a1 1 0 011-1h16a1 1 0 01.8 1.6L14 13.67V19a1 1 0 01-.45.83l-4 2.67A1 1 0 018 21.67v-8L3.2 4.6A1 1 0 013 4z" />
             </svg>
-            Фильтр
+            {t('filter.filter')}
           </span>
         </button>
         <button
           className={`px-6 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${activeTab === 'tests' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
           onClick={() => setActiveTab('tests')}
         >
-          Тесты
+          {t('tests.tests')}
         </button>
         {canManageTriggers && (
           <>
@@ -1669,13 +1784,13 @@ const TeacherDashboard = () => {
               className={`px-6 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${activeTab === 'questions' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
               onClick={() => setActiveTab('questions')}
             >
-              Вопросы
+              {t('questions.section')}
             </button>
             <button
               className={`px-6 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${activeTab === 'triggers' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
               onClick={() => setActiveTab('triggers')}
             >
-              Триггеры
+              {t('triggers.triggers')}
             </button>
           </>
         )}
@@ -1692,7 +1807,7 @@ const TeacherDashboard = () => {
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M18 18.72a8.38 8.38 0 00-12 0M12 12a4 4 0 100-8 4 4 0 000 8zm8 8a8 8 0 10-16 0" />
             </svg>
-            Ученики
+            {t('students.students')}
           </span>
         </button>
         {canManageTeachers && (
@@ -1704,7 +1819,7 @@ const TeacherDashboard = () => {
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
               </svg>
-              Учител
+              {t('teachers.teachers')}
             </span>
           </button>
         )}
@@ -1715,12 +1830,12 @@ const TeacherDashboard = () => {
           <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-5">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Дата сдачи</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">{t('results.submit_date')}</label>
                 <input
                   type="text"
                   inputMode="numeric"
                   className="input-modern"
-                  placeholder="дд.мм.гггг"
+                  placeholder={t('date.placeholder')}
                   maxLength="10"
                   value={resultFilters.date}
                   onChange={(e) => setResultFilters({ ...resultFilters, date: normalizeDateInput(e.target.value) })}
@@ -1733,12 +1848,12 @@ const TeacherDashboard = () => {
           <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
             <div className="lg:col-span-2 bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
               <div className="px-5 py-4 border-b border-gray-200">
-                <h4 className="text-lg font-semibold text-gray-900">Сданные тесты</h4>
-                <p className="text-sm text-gray-500">Найдено: {filteredResults.length}</p>
+                <h4 className="text-lg font-semibold text-gray-900">{t('results.completed_tests')}</h4>
+                <p className="text-sm text-gray-500">{t('common.found')}: {filteredResults.length}</p>
               </div>
 
               {(filteredResults || []).length === 0 ? (
-                <div className="p-8 text-center text-gray-500">Нет данных тестов</div>
+                <div className="p-8 text-center text-gray-500">{t('results.no_test_data')}</div>
               ) : (
                 <div className="divide-y divide-gray-200 max-h-[620px] overflow-y-auto">
                   {filteredResults.map((result) => {
@@ -1781,8 +1896,8 @@ const TeacherDashboard = () => {
             <div className="lg:col-span-3 bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
               <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
                 <div>
-                  <h4 className="text-lg font-semibold text-gray-900">Дейтви тудента</h4>
-                  <p className="text-sm text-gray-500">Выбранные варианты ответов</p>
+                  <h4 className="text-lg font-semibold text-gray-900">{t('results.student_details')}</h4>
+                  <p className="text-sm text-gray-500">{t('results.selected_answers')}</p>
                 </div>
                 {selectedResultDetail && (
                   <button
@@ -1796,9 +1911,9 @@ const TeacherDashboard = () => {
               </div>
 
               {loadingResultDetail ? (
-                <div className="p-8 text-center text-gray-500">Загрузка...</div>
+                <div className="p-8 text-center text-gray-500">{t('common.loading')}</div>
               ) : !selectedResultDetail ? (
-                <div className="p-8 text-center text-gray-500">Выберите тудента лева</div>
+                <div className="p-8 text-center text-gray-500">{t('results.select_student_left')}</div>
               ) : (
                 <div className="p-5">
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-5">
@@ -1808,7 +1923,7 @@ const TeacherDashboard = () => {
                     </div>
                     <div className="rounded-xl bg-red-50 border border-red-200 p-4">
                       <div className="text-2xl font-bold text-red-700">{selectedResultDetail.incorrect_count}</div>
-                      <div className="text-sm text-gray-600">еправильных</div>
+                      <div className="text-sm text-gray-600">{t('results.incorrect_short')}</div>
                     </div>
                     <div className="rounded-xl bg-blue-50 border border-blue-200 p-4">
                       <div className="text-2xl font-bold text-blue-700">{selectedResultDetail.total_questions}</div>
@@ -1820,7 +1935,7 @@ const TeacherDashboard = () => {
                       className="rounded-xl bg-gray-900 p-4 text-left text-white hover:bg-gray-800 transition-colors"
                     >
                       <div className="text-base font-semibold">Скачать PDF</div>
-                      <div className="text-sm text-gray-300">PDF файл тудента</div>
+                      <div className="text-sm text-gray-300">{t('export.student_pdf_file')}</div>
                     </button>
                   </div>
 
@@ -1888,34 +2003,34 @@ const TeacherDashboard = () => {
       {activeTab === 'tests' && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm"><p className="text-3xl font-bold text-gray-900">{testStats.total}</p><p className="text-sm text-gray-500">Всего тестов</p></div>
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm"><p className="text-3xl font-bold text-green-700">{testStats.active}</p><p className="text-sm text-gray-500">Активных тестов</p></div>
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm"><p className="text-3xl font-bold text-blue-700">{testStats.questions}</p><p className="text-sm text-gray-500">Всего вопросов</p></div>
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm"><p className="text-3xl font-bold text-amber-700">{testStats.attempts}</p><p className="text-sm text-gray-500">Всего прохождений</p></div>
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm"><p className="text-3xl font-bold text-gray-900">{testStats.total}</p><p className="text-sm text-gray-500">{t('tests.total')}</p></div>
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm"><p className="text-3xl font-bold text-green-700">{testStats.active}</p><p className="text-sm text-gray-500">{t('tests.active_total')}</p></div>
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm"><p className="text-3xl font-bold text-blue-700">{testStats.questions}</p><p className="text-sm text-gray-500">{t('questions.total')}</p></div>
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm"><p className="text-3xl font-bold text-amber-700">{testStats.attempts}</p><p className="text-sm text-gray-500">{t('tests.total_attempts')}</p></div>
           </div>
 
           <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
               <div>
-                <h4 className="text-xl font-semibold text-gray-900">Управление тестами</h4>
-                <p className="text-sm text-gray-500">Создавайте, анализируйте и управляйте тестами из одной панели.</p>
+                <h4 className="text-xl font-semibold text-gray-900">{t('tests.management')}</h4>
+                <p className="text-sm text-gray-500">{t('tests.panel_subtitle')}</p>
               </div>
               <button
                 type="button"
                 className="rounded-xl bg-green-600 px-6 py-3 text-base font-bold text-white shadow-lg hover:bg-green-700"
                 onClick={() => setShowCreateTest(true)}
               >
-                Создать тест
+                {t('tests.create')}
               </button>
             </div>
 
             {showCreateTest && (
               <div className="mt-5 rounded-xl border border-gray-200 bg-gray-50 p-4">
                 <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
-                  <input className="input-modern" value={newTest.title} onChange={(e) => setNewTest({...newTest, title: e.target.value})} placeholder="Название теста" />
-                  <input className="input-modern" value={testSettings.description} onChange={(e) => setTestSettings({...testSettings, description: e.target.value})} placeholder="Описание" />
-                  <input className="input-modern" type="number" value={testSettings.duration_minutes} onChange={(e) => setTestSettings({...testSettings, duration_minutes: e.target.value})} placeholder="Время, мин" />
-                  <input className="input-modern" type="number" value={testSettings.attempts} onChange={(e) => setTestSettings({...testSettings, attempts: e.target.value})} placeholder="Попытки" />
+                  <input className="input-modern" value={newTest.title} onChange={(e) => setNewTest({...newTest, title: e.target.value})} placeholder={t('tests.title')} />
+                  <input className="input-modern" value={testSettings.description} onChange={(e) => setTestSettings({...testSettings, description: e.target.value})} placeholder={t('common.description')} />
+                  <input className="input-modern" type="number" value={testSettings.duration_minutes} onChange={(e) => setTestSettings({...testSettings, duration_minutes: e.target.value})} placeholder={t('tests.duration_minutes')} />
+                  <input className="input-modern" type="number" value={testSettings.attempts} onChange={(e) => setTestSettings({...testSettings, attempts: e.target.value})} placeholder={t('tests.attempts')} />
                 </div>
                 {renderCreateTestForm()}
               </div>
@@ -1924,30 +2039,30 @@ const TeacherDashboard = () => {
 
           <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
             <div className="mb-5 grid grid-cols-1 gap-3 lg:grid-cols-[1fr_160px_170px_180px_180px]">
-              <input className="input-modern" value={testSearch} onChange={(e) => { setTestSearch(e.target.value); setTestPage(1); }} placeholder="Поиск по названию теста" />
+              <input className="input-modern" value={testSearch} onChange={(e) => { setTestSearch(e.target.value); setTestPage(1); }} placeholder={t('tests.search_by_title')} />
               <select className="input-modern" value={testStatusFilter} onChange={(e) => { setTestStatusFilter(e.target.value); setTestPage(1); }}>
-                <option value="all">Все статусы</option>
-                <option value="active">Активные</option>
-                <option value="draft">Черновики</option>
+                <option value="all">{t('tests.all_statuses')}</option>
+                <option value="active">{t('common.active_plural')}</option>
+                <option value="draft">{t('tests.drafts')}</option>
               </select>
               <input className="input-modern" type="date" value={testDateFilter} onChange={(e) => { setTestDateFilter(e.target.value); setTestPage(1); }} />
               <select className="input-modern" value={testTriggerFilter} onChange={(e) => { setTestTriggerFilter(e.target.value); setTestPage(1); }}>
-                <option value="">Все триггеры</option>
+                <option value="">{t('triggers.all')}</option>
                 {(triggers || []).map((trigger) => <option key={trigger.id} value={trigger.id}>{trigger.name}</option>)}
               </select>
               <select className="input-modern" value={testSort} onChange={(e) => setTestSort(e.target.value)}>
-                <option value="created_desc">Сначала новые</option>
-                <option value="created_asc">Сначала старые</option>
-                <option value="title_asc">По названию</option>
-                <option value="questions_desc">Больше вопросов</option>
-                <option value="attempts_desc">Больше прохождений</option>
+                <option value="created_desc">{t('sort.new_first')}</option>
+                <option value="created_asc">{t('sort.old_first')}</option>
+                <option value="title_asc">{t('sort.by_title')}</option>
+                <option value="questions_desc">{t('sort.more_questions')}</option>
+                <option value="attempts_desc">{t('sort.more_attempts')}</option>
               </select>
             </div>
 
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
               {pagedTests.map((test) => {
                 const metrics = getTestMetrics(test);
-                const statusText = test.is_active ? 'Активен' : 'Черновик';
+                const statusText = test.is_active ? t('common.active') : t('tests.draft');
                 const statusClass = test.is_active ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-700';
                 return (
                   <div key={test.id} className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md">
@@ -1957,33 +2072,33 @@ const TeacherDashboard = () => {
                           <h5 className="text-lg font-bold text-gray-900">{test.title}</h5>
                           <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${statusClass}`}>{statusText}</span>
                         </div>
-                        <p className="text-sm text-gray-500">{testSettings.description || 'Описание теста не задано'}</p>
+                        <p className="text-sm text-gray-500">{testSettings.description || t('tests.no_description')}</p>
                       </div>
                       <div className="rounded-lg bg-gray-50 px-3 py-2 text-right">
                         <p className="text-xl font-bold text-gray-900">100</p>
-                        <p className="text-xs text-gray-500">вопросов</p>
+                        <p className="text-xs text-gray-500">{t('questions.questions')}</p>
                       </div>
                     </div>
                     <div className="mb-4 flex flex-wrap gap-2">
                       {(test.triggers || []).length ? (test.triggers || []).map((trigger) => (
                         <span key={trigger.id || trigger.slug || trigger.name} className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">{trigger.name || trigger.slug}</span>
-                      )) : <span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-semibold text-gray-600">Без триггеров</span>}
+                       )) : <span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-semibold text-gray-600">{t('triggers.none')}</span>}
                     </div>
                     <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-                      <div className="rounded-lg bg-gray-50 p-3"><p className="text-xs text-gray-500">Прохождений</p><p className="font-bold text-gray-900">{metrics.attempts}</p></div>
-                      <div className="rounded-lg bg-gray-50 p-3"><p className="text-xs text-gray-500">Средний</p><p className="font-bold text-gray-900">{metrics.average}%</p></div>
-                      <div className="rounded-lg bg-gray-50 p-3"><p className="text-xs text-gray-500">Лучший</p><p className="font-bold text-gray-900">{metrics.best}%</p></div>
-                      <div className="rounded-lg bg-gray-50 p-3"><p className="text-xs text-gray-500">Худший</p><p className="font-bold text-gray-900">{metrics.worst}%</p></div>
-                      <div className="rounded-lg bg-gray-50 p-3"><p className="text-xs text-gray-500">Успешность</p><p className="font-bold text-gray-900">{metrics.success}%</p></div>
+                      <div className="rounded-lg bg-gray-50 p-3"><p className="text-xs text-gray-500">{t('tests.attempts_done')}</p><p className="font-bold text-gray-900">{metrics.attempts}</p></div>
+                      <div className="rounded-lg bg-gray-50 p-3"><p className="text-xs text-gray-500">{t('stats.average_short')}</p><p className="font-bold text-gray-900">{metrics.average}%</p></div>
+                      <div className="rounded-lg bg-gray-50 p-3"><p className="text-xs text-gray-500">{t('stats.best')}</p><p className="font-bold text-gray-900">{metrics.best}%</p></div>
+                      <div className="rounded-lg bg-gray-50 p-3"><p className="text-xs text-gray-500">{t('stats.worst')}</p><p className="font-bold text-gray-900">{metrics.worst}%</p></div>
+                      <div className="rounded-lg bg-gray-50 p-3"><p className="text-xs text-gray-500">{t('stats.success_rate')}</p><p className="font-bold text-gray-900">{metrics.success}%</p></div>
                     </div>
-                    <div className="mt-3 text-xs text-gray-500">Создан: {test.created_at ? new Date(test.created_at).toLocaleString('ru-RU') : '-'}</div>
+                    <div className="mt-3 text-xs text-gray-500">{t('common.created_colon')} {test.created_at ? new Date(test.created_at).toLocaleString('ru-RU') : '-'}</div>
                     <div className="mt-4 flex flex-wrap gap-2">
-                      <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => setTestDrawer(test)}>Просмотр</button>
-                      <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => { setNewTest({ title: test.title }); setShowCreateTest(true); }}>Редактировать</button>
-                      <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => setTestDrawer(test)}>Статистика</button>
-                      <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => duplicateTest(test)}>Дублировать</button>
-                      <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => toggleTestActive(test)}>{test.is_active ? 'Деактивировать' : 'Активировать'}</button>
-                      <button type="button" className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-100" onClick={() => handleDeleteTest(test)}>Удалить</button>
+                      <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => setTestDrawer(test)}>{t('common.view')}</button>
+                      <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => { setNewTest({ title: test.title }); setShowCreateTest(true); }}>{t('common.edit')}</button>
+                      <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => setTestDrawer(test)}>{t('stats.statistics')}</button>
+                      <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => duplicateTest(test)}>{t('common.duplicate')}</button>
+                      <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => toggleTestActive(test)}>{test.is_active ? t('common.deactivate') : t('common.activate')}</button>
+                      <button type="button" className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-100" onClick={() => handleDeleteTest(test)}>{t('common.delete')}</button>
                     </div>
                   </div>
                 );
@@ -1992,37 +2107,37 @@ const TeacherDashboard = () => {
 
             <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <select className="rounded-lg border border-gray-200 px-3 py-2 text-sm" value={testPageSize} onChange={(e) => { setTestPageSize(Number(e.target.value)); setTestPage(1); }}>
-                {[10, 25, 50, 100].map((size) => <option key={size} value={size}>{size} на странице</option>)}
+                {[10, 25, 50, 100].map((size) => <option key={size} value={size}>{t('pagination.per_page', { count: size })}</option>)}
               </select>
               <div className="flex items-center gap-2">
-                <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 disabled:opacity-50" disabled={testSafePage <= 1} onClick={() => setTestPage((page) => Math.max(1, page - 1))}>Назад</button>
+                <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 disabled:opacity-50" disabled={testSafePage <= 1} onClick={() => setTestPage((page) => Math.max(1, page - 1))}>{t('common.back')}</button>
                 <span className="text-sm font-semibold text-gray-700">{testSafePage} / {testTotalPages}</span>
-                <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 disabled:opacity-50" disabled={testSafePage >= testTotalPages} onClick={() => setTestPage((page) => Math.min(testTotalPages, page + 1))}>Далее</button>
+                <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 disabled:opacity-50" disabled={testSafePage >= testTotalPages} onClick={() => setTestPage((page) => Math.min(testTotalPages, page + 1))}>{t('common.next')}</button>
               </div>
             </div>
           </div>
 
           {testDrawer && (
             <div className="fixed inset-0 z-50 flex justify-end bg-black/30">
-              <button type="button" className="absolute inset-0 cursor-default" onClick={() => setTestDrawer(null)} aria-label="Закрыть" />
+              <button type="button" className="absolute inset-0 cursor-default" onClick={() => setTestDrawer(null)} aria-label={t('common.close')} />
               <div className="relative h-full w-full max-w-2xl overflow-y-auto bg-white p-5 shadow-2xl">
                 {(() => {
                   const metrics = getTestMetrics(testDrawer);
                   return (
                     <>
                       <div className="mb-5 flex items-start justify-between gap-3">
-                        <div><h4 className="text-xl font-bold text-gray-900">{testDrawer.title}</h4><p className="text-sm text-gray-500">Детальная статистика и быстрые действия</p></div>
-                        <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => setTestDrawer(null)}>Закрыть</button>
+                        <div><h4 className="text-xl font-bold text-gray-900">{testDrawer.title}</h4><p className="text-sm text-gray-500">{t('tests.detail_subtitle')}</p></div>
+                        <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => setTestDrawer(null)}>{t('common.close')}</button>
                       </div>
                       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-                        <div className="rounded-xl bg-gray-50 p-4"><p className="text-xs text-gray-500">Прохождений</p><p className="text-xl font-bold">{metrics.attempts}</p></div>
-                        <div className="rounded-xl bg-gray-50 p-4"><p className="text-xs text-gray-500">Средний</p><p className="text-xl font-bold">{metrics.average}%</p></div>
-                        <div className="rounded-xl bg-gray-50 p-4"><p className="text-xs text-gray-500">Лучший</p><p className="text-xl font-bold">{metrics.best}%</p></div>
-                        <div className="rounded-xl bg-gray-50 p-4"><p className="text-xs text-gray-500">Худший</p><p className="text-xl font-bold">{metrics.worst}%</p></div>
-                        <div className="rounded-xl bg-gray-50 p-4"><p className="text-xs text-gray-500">Успешность</p><p className="text-xl font-bold">{metrics.success}%</p></div>
+                        <div className="rounded-xl bg-gray-50 p-4"><p className="text-xs text-gray-500">{t('tests.attempts_done')}</p><p className="text-xl font-bold">{metrics.attempts}</p></div>
+                        <div className="rounded-xl bg-gray-50 p-4"><p className="text-xs text-gray-500">{t('stats.average_short')}</p><p className="text-xl font-bold">{metrics.average}%</p></div>
+                        <div className="rounded-xl bg-gray-50 p-4"><p className="text-xs text-gray-500">{t('stats.best')}</p><p className="text-xl font-bold">{metrics.best}%</p></div>
+                        <div className="rounded-xl bg-gray-50 p-4"><p className="text-xs text-gray-500">{t('stats.worst')}</p><p className="text-xl font-bold">{metrics.worst}%</p></div>
+                        <div className="rounded-xl bg-gray-50 p-4"><p className="text-xs text-gray-500">{t('stats.success_rate')}</p><p className="text-xl font-bold">{metrics.success}%</p></div>
                       </div>
                       <div className="mt-5 rounded-xl border border-gray-200 p-4">
-                        <p className="mb-3 font-semibold text-gray-900">Диаграмма результатов</p>
+                        <p className="mb-3 font-semibold text-gray-900">{t('tests.results_chart')}</p>
                         {['0-49%', '50-69%', '70-89%', '90-100%'].map((label, index) => (
                           <div key={label} className="mb-2">
                             <div className="mb-1 flex justify-between text-xs text-gray-500"><span>{label}</span><span>{metrics.distribution[index]}</span></div>
@@ -2031,12 +2146,12 @@ const TeacherDashboard = () => {
                         ))}
                       </div>
                       <div className="mt-5 flex flex-wrap gap-2">
-                        <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => duplicateTest(testDrawer)}>Создать копию</button>
-                        <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => exportTest(testDrawer, 'pdf')}>Экспорт PDF</button>
-                        <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => exportTest(testDrawer, 'excel')}>Экспорт Excel</button>
-                        <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => printTest(testDrawer)}>Печать теста</button>
-                        <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => toggleTestActive(testDrawer)}>Архивация теста</button>
-                        <button type="button" className="rounded-lg bg-green-600 px-3 py-2 text-sm font-semibold text-white hover:bg-green-700" onClick={() => setTestPreview(testDrawer)}>Предпросмотр</button>
+                        <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => duplicateTest(testDrawer)}>{t('common.create_copy')}</button>
+                        <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => exportTest(testDrawer, 'pdf')}>{t('export.pdf')}</button>
+                        <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => exportTest(testDrawer, 'excel')}>{t('export.excel')}</button>
+                        <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => printTest(testDrawer)}>{t('tests.print')}</button>
+                        <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => toggleTestActive(testDrawer)}>{t('tests.archive')}</button>
+                        <button type="button" className="rounded-lg bg-green-600 px-3 py-2 text-sm font-semibold text-white hover:bg-green-700" onClick={() => setTestPreview(testDrawer)}>{t('common.preview')}</button>
                       </div>
                     </>
                   );
@@ -2049,8 +2164,8 @@ const TeacherDashboard = () => {
             <div className="fixed inset-0 z-[60] overflow-y-auto bg-black/40 p-4">
               <div className="mx-auto max-w-3xl rounded-xl bg-white p-5 shadow-2xl">
                 <div className="mb-4 flex items-start justify-between gap-3">
-                  <div><h4 className="text-xl font-bold text-gray-900">Предпросмотр: {testPreview.title}</h4><p className="text-sm text-gray-500">Как тест видит ученик, с правильными ответами для преподавателя.</p></div>
-                  <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => setTestPreview(null)}>Закрыть</button>
+                  <div><h4 className="text-xl font-bold text-gray-900">{t('common.preview_colon')} {testPreview.title}</h4><p className="text-sm text-gray-500">{t('tests.preview_subtitle')}</p></div>
+                  <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => setTestPreview(null)}>{t('common.close')}</button>
                 </div>
                 <div className="space-y-3">
                   {(testPreview.questions || []).slice(0, 100).map((question, index) => (
@@ -2082,10 +2197,11 @@ const TeacherDashboard = () => {
           <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
             <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <h4 className="text-xl font-semibold text-gray-900">Создать вопрос</h4>
+                <h4 className="text-xl font-semibold text-gray-900">{editingQuestionId ? 'Редактировать вопрос' : 'Создать вопрос'}</h4>
                 <p className="text-sm text-gray-500">Черновик сохраняется автоматически в браузере.</p>
               </div>
               <div className="flex flex-wrap gap-2">
+                <button type="button" className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100" onClick={handleAutoTranslateNewQuestion}>Автоматически перевести</button>
                 <button type="button" className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => setQuestionPreview(!questionPreview)}>Предпросмотр</button>
                 <button type="button" className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={clearQuestionForm}>Очистить</button>
               </div>
@@ -2093,13 +2209,25 @@ const TeacherDashboard = () => {
             <form onSubmit={handleCreateQuestion} className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               <div className="lg:col-span-2">
                 <label className="mb-2 block text-sm font-semibold text-gray-700">Текст вопроса</label>
-                <textarea className="input-modern min-h-[110px]" value={newQuestion.text} onChange={(e) => setNewQuestion({...newQuestion, text: e.target.value})} required placeholder="Введите полный текст вопроса" />
+                <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                  <div>
+                    <div className="mb-1 text-xs font-bold uppercase text-gray-500">Русская версия</div>
+                    <textarea className="input-modern min-h-[110px]" value={newQuestion.text_ru} onChange={(e) => setNewQuestion({...newQuestion, text: e.target.value, text_ru: e.target.value})} placeholder="Введите полный текст вопроса" />
+                  </div>
+                  <div>
+                    <div className="mb-1 text-xs font-bold uppercase text-gray-500">Кыргызская версия</div>
+                    <textarea className="input-modern min-h-[110px]" value={newQuestion.text_ky} onChange={(e) => setNewQuestion({...newQuestion, text_ky: e.target.value})} placeholder={t('questions.text_ky_placeholder')} />
+                  </div>
+                </div>
                 <p className="mt-1 text-xs text-gray-500">Формулируйте вопрос коротко и однозначно.</p>
               </div>
               {['a', 'b', 'c', 'd'].map((key) => (
                 <div key={key}>
                   <label className="mb-2 block text-sm font-semibold text-gray-700">Вариант {key.toUpperCase()}</label>
-                  <input className="input-modern" value={newQuestion[`option_${key}`] || ''} onChange={(e) => setNewQuestion({...newQuestion, [`option_${key}`]: e.target.value})} required={key !== 'd'} placeholder={`Ответ ${key.toUpperCase()}`} />
+                  <div className="grid grid-cols-1 gap-2">
+                    <input className="input-modern" value={newQuestion[`option_${key}_ru`] || ''} onChange={(e) => setNewQuestion({...newQuestion, [`option_${key}`]: e.target.value, [`option_${key}_ru`]: e.target.value})} placeholder={`Ответ ${key.toUpperCase()} на русском`} />
+                    <input className="input-modern" value={newQuestion[`option_${key}_ky`] || ''} onChange={(e) => setNewQuestion({...newQuestion, [`option_${key}_ky`]: e.target.value})} placeholder={`Жооп ${key.toUpperCase()} кыргызча`} />
+                  </div>
                   <p className="mt-1 text-xs text-gray-500">{key === 'd' ? 'Дополнительный вариант, можно оставить пустым.' : 'Обязательный вариант ответа.'}</p>
                 </div>
               ))}
@@ -2121,16 +2249,16 @@ const TeacherDashboard = () => {
               </div>
               {questionPreview && (
                 <div className="lg:col-span-2 rounded-xl border border-green-100 bg-green-50 p-4">
-                  <p className="font-semibold text-gray-900">{newQuestion.text || 'Текст вопроса'}</p>
+                  <p className="font-semibold text-gray-900">{localizeField(newQuestion, 'text', language) || 'Текст вопроса'}</p>
                   <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
-                    {['A', 'B', 'C', 'D'].map((key) => newQuestion[`option_${key.toLowerCase()}`] && (
-                      <div key={key} className={`rounded-lg px-3 py-2 text-sm ${newQuestion.correct_answer === key ? 'bg-green-600 text-white' : 'bg-white text-gray-700'}`}>{key}. {newQuestion[`option_${key.toLowerCase()}`]}</div>
+                    {['A', 'B', 'C', 'D'].map((key) => localizeField(newQuestion, `option_${key.toLowerCase()}`, language) && (
+                      <div key={key} className={`rounded-lg px-3 py-2 text-sm ${newQuestion.correct_answer === key ? 'bg-green-600 text-white' : 'bg-white text-gray-700'}`}>{key}. {localizeField(newQuestion, `option_${key.toLowerCase()}`, language)}</div>
                     ))}
                   </div>
                 </div>
               )}
               <div className="lg:col-span-2 flex justify-end">
-                <button type="submit" className="rounded-lg bg-green-600 px-5 py-3 text-sm font-bold text-white shadow-sm hover:bg-green-700">Создать вопрос</button>
+                <button type="submit" className="rounded-lg bg-green-600 px-5 py-3 text-sm font-bold text-white shadow-sm hover:bg-green-700">{editingQuestionId ? 'Сохранить вопрос' : 'Создать вопрос'}</button>
               </div>
             </form>
           </div>
@@ -2179,17 +2307,17 @@ const TeacherDashboard = () => {
                         <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">{q.trigger?.name || '-'}</span>
                         <span className="rounded-full bg-green-50 px-2.5 py-1 text-xs font-semibold text-green-700">Правильный: {q.correct_answer}</span>
                       </div>
-                      <h5 className="text-base font-bold text-gray-900">{q.text}</h5>
+                      <h5 className="text-base font-bold text-gray-900">{localizeField(q, 'text', language)}</h5>
                     </div>
                   </div>
                   <div className="grid grid-cols-1 gap-2 md:grid-cols-2">
-                    {['A', 'B', 'C', 'D'].map((key) => q[`option_${key.toLowerCase()}`] && (
-                      <div key={key} className={`rounded-lg px-3 py-2 text-sm ${q.correct_answer === key ? 'bg-green-600 text-white' : 'bg-gray-50 text-gray-700'}`}>{key}. {q[`option_${key.toLowerCase()}`]}</div>
+                    {['A', 'B', 'C', 'D'].map((key) => localizeField(q, `option_${key.toLowerCase()}`, language) && (
+                      <div key={key} className={`rounded-lg px-3 py-2 text-sm ${q.correct_answer === key ? 'bg-green-600 text-white' : 'bg-gray-50 text-gray-700'}`}>{key}. {localizeField(q, `option_${key.toLowerCase()}`, language)}</div>
                     ))}
                   </div>
                   <div className="mt-3 text-xs text-gray-500">Создан: {q.created_at ? new Date(q.created_at).toLocaleString('ru-RU') : '-'}</div>
                   <div className="mt-4 flex flex-wrap gap-2">
-                    <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => copyQuestion(q)}>Редактировать</button>
+                    <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => startEditQuestion(q)}>Редактировать</button>
                     <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => setQuestionDrawer(q)}>Просмотр</button>
                     <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => copyQuestion(q)}>Копировать</button>
                     <select className="rounded-lg border border-gray-200 px-3 py-2 text-sm" onChange={(e) => moveQuestionToTrigger(q, e.target.value)} defaultValue="">
@@ -2242,10 +2370,10 @@ const TeacherDashboard = () => {
         <div className="space-y-6">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
             {[
-              { label: 'Триггера', value: triggerStats.total, tone: 'bg-green-50 text-green-700' },
-              { label: 'Активных', value: triggerStats.active, tone: 'bg-blue-50 text-blue-700' },
-              { label: 'Вопросов', value: triggerStats.questions, tone: 'bg-purple-50 text-purple-700' },
-              { label: 'Тестов', value: triggerStats.attempts, tone: 'bg-amber-50 text-amber-700' }
+              { label: t('triggers.total_label'), value: triggerStats.total, tone: 'bg-green-50 text-green-700' },
+              { label: t('common.active_many'), value: triggerStats.active, tone: 'bg-blue-50 text-blue-700' },
+              { label: t('questions.section'), value: triggerStats.questions, tone: 'bg-purple-50 text-purple-700' },
+              { label: t('triggers.tests_count'), value: triggerStats.attempts, tone: 'bg-amber-50 text-amber-700' }
             ].map((item) => (
               <div key={item.label} className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md">
                 <div className={`mb-3 inline-flex rounded-lg px-3 py-2 ${item.tone}`}>
@@ -2262,14 +2390,14 @@ const TeacherDashboard = () => {
           <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
             <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <h4 className="text-xl font-semibold text-gray-900">Создать триггер</h4>
-                <p className="text-sm text-gray-500">Добавьте категорию, к которой будут привязаны вопросы и статистика тестирования.</p>
+                <h4 className="text-xl font-semibold text-gray-900">{t('triggers.create')}</h4>
+                <p className="text-sm text-gray-500">{t('triggers.create_hint')}</p>
               </div>
               {triggerNotice && (
                 <div className={`rounded-lg px-3 py-2 text-sm font-semibold ${
-                  triggerNotice.includes('успешно') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+                  triggerNotice === 'triggers.notice_saved' ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
                 }`}>
-                  {triggerNotice}
+                  {t(triggerNotice)}
                 </div>
               )}
             </div>
@@ -2280,23 +2408,23 @@ const TeacherDashboard = () => {
                   <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 7h10M7 12h8M7 17h6" />
                   </svg>
-                  Название триггера
+                  {t('triggers.name')}
                 </label>
                 <input
                   className="input-modern"
                   value={newTrigger.name}
                   onChange={(e) => setNewTrigger({...newTrigger, name: e.target.value})}
                   required
-                  placeholder="Например: Тактическая подготовка"
+                  placeholder={t('triggers.name_placeholder')}
                 />
-                <p className="mt-1 text-xs text-gray-500">Короткое название, понятное учителю и ученику.</p>
+                <p className="mt-1 text-xs text-gray-500">{t('triggers.name_hint')}</p>
               </div>
               <div>
                 <label className="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-700">
                   <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l3 3-3 3m5 0h3" />
                   </svg>
-                  Код триггера
+                  {t('triggers.code')}
                 </label>
                 <input
                   className="input-modern"
@@ -2305,22 +2433,22 @@ const TeacherDashboard = () => {
                   required
                   placeholder="tactical-training"
                 />
-                <p className="mt-1 text-xs text-gray-500">Используйте латиницу, цифры и дефисы для системного кода.</p>
+                <p className="mt-1 text-xs text-gray-500">{t('triggers.code_hint')}</p>
               </div>
               <div className="lg:col-span-2">
                 <label className="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-700">
                   <svg className="h-4 w-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" />
                   </svg>
-                  Описание
+                  {t('common.description')}
                 </label>
                 <textarea
                   className="input-modern min-h-[96px]"
                   value={newTrigger.description}
                   onChange={(e) => setNewTrigger({...newTrigger, description: e.target.value})}
-                  placeholder="Что входит в эту категорию вопросов"
+                  placeholder={t('triggers.description_placeholder')}
                 />
-                <p className="mt-1 text-xs text-gray-500">Описание помогает быстрее понять назначение триггера.</p>
+                <p className="mt-1 text-xs text-gray-500">{t('triggers.description_hint')}</p>
               </div>
               <div className="lg:col-span-2 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                 <label className="inline-flex items-center gap-3 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
@@ -2331,16 +2459,16 @@ const TeacherDashboard = () => {
                     onChange={(e) => setNewTrigger({...newTrigger, is_active: e.target.checked})}
                   />
                   <span>
-                    <span className="block text-sm font-semibold text-gray-900">{newTrigger.is_active ? 'Активен' : 'Неактивен'}</span>
-                    <span className="block text-xs text-gray-500">Неактивные триггеры не участвуют в выборе вопросов.</span>
+                    <span className="block text-sm font-semibold text-gray-900">{newTrigger.is_active ? t('common.active') : t('common.inactive')}</span>
+                    <span className="block text-xs text-gray-500">{t('triggers.inactive_hint')}</span>
                   </span>
                 </label>
                 <div className="flex flex-wrap gap-2">
                   <button type="button" className="rounded-lg border border-gray-200 bg-white px-5 py-2.5 text-sm font-semibold text-gray-700 shadow-sm hover:bg-gray-50" onClick={clearTriggerForm}>
-                    Очистить
+                    {t('common.clear')}
                   </button>
                   <button type="submit" className="rounded-lg bg-green-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-green-700">
-                    Создать триггер
+                    {t('triggers.create')}
                   </button>
                 </div>
               </div>
@@ -2350,22 +2478,22 @@ const TeacherDashboard = () => {
           <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
               <div>
-                <h4 className="text-xl font-semibold text-gray-900">Триггеры</h4>
-                <p className="text-sm text-gray-500">Найдено: {visibleTriggers.length} из {(triggers || []).length}</p>
+                <h4 className="text-xl font-semibold text-gray-900">{t('triggers.triggers')}</h4>
+                <p className="text-sm text-gray-500">{t('triggers.found_from', { shown: visibleTriggers.length, total: (triggers || []).length })}</p>
               </div>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
-                <input className="input-modern" value={triggerSearchName} onChange={(e) => setTriggerSearchName(e.target.value)} placeholder="Поиск по названию" />
-                <input className="input-modern" value={triggerSearchCode} onChange={(e) => setTriggerSearchCode(e.target.value)} placeholder="Поиск по коду" />
+                <input className="input-modern" value={triggerSearchName} onChange={(e) => setTriggerSearchName(e.target.value)} placeholder={t('triggers.search_by_name')} />
+                <input className="input-modern" value={triggerSearchCode} onChange={(e) => setTriggerSearchCode(e.target.value)} placeholder={t('triggers.search_by_code')} />
                 <select className="input-modern" value={triggerStatusFilter} onChange={(e) => setTriggerStatusFilter(e.target.value)}>
-                  <option value="all">Все статусы</option>
-                  <option value="active">Активные</option>
-                  <option value="inactive">Неактивные</option>
+                  <option value="all">{t('tests.all_statuses')}</option>
+                  <option value="active">{t('common.active_plural')}</option>
+                  <option value="inactive">{t('common.inactive_many')}</option>
                 </select>
                 <select className="input-modern" value={triggerSort} onChange={(e) => setTriggerSort(e.target.value)}>
-                  <option value="created_desc">Сначала новые</option>
-                  <option value="created_asc">Сначала старые</option>
-                  <option value="questions_desc">Больше вопросов</option>
-                  <option value="questions_asc">Меньше вопросов</option>
+                  <option value="created_desc">{t('sort.new_first')}</option>
+                  <option value="created_asc">{t('sort.old_first')}</option>
+                  <option value="questions_desc">{t('sort.more_questions')}</option>
+                  <option value="questions_asc">{t('triggers.less_questions')}</option>
                 </select>
               </div>
             </div>
@@ -2380,11 +2508,11 @@ const TeacherDashboard = () => {
                       <textarea className="input-modern min-h-[80px]" value={editingTrigger.description} onChange={(e) => setEditingTrigger({...editingTrigger, description: e.target.value})} />
                       <label className="inline-flex items-center gap-2 text-sm font-semibold text-gray-700">
                         <input type="checkbox" className="h-4 w-4 rounded border-gray-300 text-green-600" checked={editingTrigger.is_active} onChange={(e) => setEditingTrigger({...editingTrigger, is_active: e.target.checked})} />
-                        Активен
+                        {t('common.active')}
                       </label>
                       <div className="flex flex-wrap gap-2">
-                        <button type="submit" className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700">Сохранить</button>
-                        <button type="button" className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => setEditingTriggerId(null)}>Отмена</button>
+                        <button type="submit" className="rounded-lg bg-green-600 px-4 py-2 text-sm font-semibold text-white hover:bg-green-700">{t('common.save')}</button>
+                        <button type="button" className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => setEditingTriggerId(null)}>{t('common.cancel')}</button>
                       </div>
                     </form>
                   ) : (
@@ -2392,31 +2520,31 @@ const TeacherDashboard = () => {
                       <div className="mb-4 flex items-start justify-between gap-3">
                         <div>
                           <div className="mb-2 flex flex-wrap items-center gap-2">
-                            <h5 className="text-lg font-bold text-gray-900">{trigger.name}</h5>
+                            <h5 className="text-lg font-bold text-gray-900">{t(trigger.name)}</h5>
                             <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${trigger.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
-                              {trigger.is_active ? 'Активен' : 'Неактивен'}
+                              {trigger.is_active ? t('common.active') : t('common.inactive')}
                             </span>
                           </div>
                           <p className="text-sm font-mono text-gray-500">{trigger.slug}</p>
                         </div>
                         <div className="rounded-lg bg-gray-50 px-3 py-2 text-right">
                           <p className="text-xl font-bold text-gray-900">{trigger.question_count || 0}</p>
-                          <p className="text-xs text-gray-500">вопросов</p>
+                          <p className="text-xs text-gray-500">{t('questions.questions')}</p>
                         </div>
                       </div>
-                      <p className="mb-4 min-h-[40px] text-sm text-gray-600">{trigger.description || 'Описание не заполнено'}</p>
+                      <p className="mb-4 min-h-[40px] text-sm text-gray-600">{trigger.description ? t(trigger.description) : t('triggers.no_description')}</p>
                       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
-                        <div className="rounded-lg bg-gray-50 p-3"><p className="text-xs text-gray-500">Прохождений</p><p className="font-bold text-gray-900">{trigger.attempts_count || 0}</p></div>
-                        <div className="rounded-lg bg-gray-50 p-3"><p className="text-xs text-gray-500">Средний балл</p><p className="font-bold text-gray-900">{trigger.average_score || 0}</p></div>
-                        <div className="rounded-lg bg-gray-50 p-3"><p className="text-xs text-gray-500">Успешность</p><p className="font-bold text-gray-900">{trigger.success_rate || 0}%</p></div>
-                        <div className="rounded-lg bg-gray-50 p-3"><p className="text-xs text-gray-500">Создан</p><p className="font-bold text-gray-900">{trigger.created_at ? new Date(trigger.created_at).toLocaleDateString('ru-RU') : '-'}</p></div>
+                        <div className="rounded-lg bg-gray-50 p-3"><p className="text-xs text-gray-500">{t('tests.attempts_done')}</p><p className="font-bold text-gray-900">{trigger.attempts_count || 0}</p></div>
+                        <div className="rounded-lg bg-gray-50 p-3"><p className="text-xs text-gray-500">{t('stats.average_score')}</p><p className="font-bold text-gray-900">{trigger.average_score || 0}</p></div>
+                        <div className="rounded-lg bg-gray-50 p-3"><p className="text-xs text-gray-500">{t('stats.success_rate')}</p><p className="font-bold text-gray-900">{trigger.success_rate || 0}%</p></div>
+                        <div className="rounded-lg bg-gray-50 p-3"><p className="text-xs text-gray-500">{t('common.created')}</p><p className="font-bold text-gray-900">{trigger.created_at ? new Date(trigger.created_at).toLocaleDateString('ru-RU') : '-'}</p></div>
                       </div>
                       <div className="mt-4 flex flex-wrap gap-2">
-                        <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => startEditTrigger(trigger)}>Редактировать</button>
-                        <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => openTriggerQuestions(trigger)}>Просмотр</button>
-                        <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => openTriggerQuestions(trigger)}>Вопросы</button>
-                        <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => openTriggerQuestions(trigger)}>Статистика</button>
-                        <button type="button" className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-100" onClick={() => handleDeleteTrigger(trigger)}>Удалить</button>
+                        <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => startEditTrigger(trigger)}>{t('common.edit')}</button>
+                        <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => openTriggerQuestions(trigger)}>{t('common.view')}</button>
+                        <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => openTriggerQuestions(trigger)}>{t('questions.section')}</button>
+                        <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => openTriggerQuestions(trigger)}>{t('stats.statistics')}</button>
+                        <button type="button" className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-100" onClick={() => handleDeleteTrigger(trigger)}>{t('common.delete')}</button>
                       </div>
                     </>
                   )}
@@ -2427,44 +2555,50 @@ const TeacherDashboard = () => {
 
           {triggerDrawer && (
             <div className="fixed inset-0 z-50 flex justify-end bg-black/30">
-              <button type="button" className="absolute inset-0 cursor-default" onClick={() => setTriggerDrawer(null)} aria-label="Закрыть панель" />
+              <button type="button" className="absolute inset-0 cursor-default" onClick={() => setTriggerDrawer(null)} aria-label={t('triggers.drawer_aria')} />
               <div className="relative h-full w-full max-w-xl overflow-y-auto bg-white p-5 shadow-2xl">
                 <div className="mb-5 flex items-start justify-between gap-3">
                   <div>
-                    <h4 className="text-xl font-bold text-gray-900">{triggerDrawer.name}</h4>
-                    <p className="text-sm text-gray-500">Вопросы триггера: {getTriggerQuestions(triggerDrawer).length}</p>
+                    <h4 className="text-xl font-bold text-gray-900">{t(triggerDrawer.name)}</h4>
+                    <p className="text-sm text-gray-500">{t('triggers.questions_count', { count: getTriggerQuestions(triggerDrawer).length })}</p>
                   </div>
                   <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => setTriggerDrawer(null)}>
-                    Закрыть
+                    {t('common.close')}
                   </button>
                 </div>
 
-                <input className="input-modern mb-4" value={triggerQuestionSearch} onChange={(e) => setTriggerQuestionSearch(e.target.value)} placeholder="Поиск по вопросам" />
+                <input className="input-modern mb-4" value={triggerQuestionSearch} onChange={(e) => setTriggerQuestionSearch(e.target.value)} placeholder={t('triggers.search_questions')} />
 
                 <form onSubmit={handleCreateDrawerQuestion} className="mb-5 rounded-xl border border-gray-200 bg-gray-50 p-4">
-                  <h5 className="mb-3 font-semibold text-gray-900">Добавить вопрос</h5>
+                  <h5 className="mb-3 font-semibold text-gray-900">{t('questions.add')}</h5>
                   <div className="space-y-3">
-                    <textarea className="input-modern min-h-[80px]" value={drawerQuestionForm.text} onChange={(e) => setDrawerQuestionForm({...drawerQuestionForm, text: e.target.value})} placeholder="Текст вопроса" required />
-                    <input className="input-modern" value={drawerQuestionForm.option_a} onChange={(e) => setDrawerQuestionForm({...drawerQuestionForm, option_a: e.target.value})} placeholder="Вариант A" required />
-                    <input className="input-modern" value={drawerQuestionForm.option_b} onChange={(e) => setDrawerQuestionForm({...drawerQuestionForm, option_b: e.target.value})} placeholder="Вариант B" required />
-                    <input className="input-modern" value={drawerQuestionForm.option_c} onChange={(e) => setDrawerQuestionForm({...drawerQuestionForm, option_c: e.target.value})} placeholder="Вариант C" required />
-                    <input className="input-modern" value={drawerQuestionForm.option_d} onChange={(e) => setDrawerQuestionForm({...drawerQuestionForm, option_d: e.target.value})} placeholder="Вариант D" />
+                    <button type="button" className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100" onClick={handleAutoTranslateDrawerQuestion}>{t('questions.auto_translate')}</button>
+                    <textarea className="input-modern min-h-[80px]" value={drawerQuestionForm.text_ru} onChange={(e) => setDrawerQuestionForm({...drawerQuestionForm, text: e.target.value, text_ru: e.target.value})} placeholder={t('questions.text_ru_placeholder')} />
+                    <textarea className="input-modern min-h-[80px]" value={drawerQuestionForm.text_ky} onChange={(e) => setDrawerQuestionForm({...drawerQuestionForm, text_ky: e.target.value})} placeholder={t('questions.drawer_text_ky_placeholder')} />
+                    <input className="input-modern" value={drawerQuestionForm.option_a_ru} onChange={(e) => setDrawerQuestionForm({...drawerQuestionForm, option_a: e.target.value, option_a_ru: e.target.value})} placeholder={t('answers.option_ru_placeholder', { option: 'A' })} />
+                    <input className="input-modern" value={drawerQuestionForm.option_a_ky} onChange={(e) => setDrawerQuestionForm({...drawerQuestionForm, option_a_ky: e.target.value})} placeholder={t('answers.option_ky_placeholder', { option: 'A' })} />
+                    <input className="input-modern" value={drawerQuestionForm.option_b_ru} onChange={(e) => setDrawerQuestionForm({...drawerQuestionForm, option_b: e.target.value, option_b_ru: e.target.value})} placeholder={t('answers.option_ru_placeholder', { option: 'B' })} />
+                    <input className="input-modern" value={drawerQuestionForm.option_b_ky} onChange={(e) => setDrawerQuestionForm({...drawerQuestionForm, option_b_ky: e.target.value})} placeholder={t('answers.option_ky_placeholder', { option: 'B' })} />
+                    <input className="input-modern" value={drawerQuestionForm.option_c_ru} onChange={(e) => setDrawerQuestionForm({...drawerQuestionForm, option_c: e.target.value, option_c_ru: e.target.value})} placeholder={t('answers.option_ru_placeholder', { option: 'C' })} />
+                    <input className="input-modern" value={drawerQuestionForm.option_c_ky} onChange={(e) => setDrawerQuestionForm({...drawerQuestionForm, option_c_ky: e.target.value})} placeholder={t('answers.option_ky_placeholder', { option: 'C' })} />
+                    <input className="input-modern" value={drawerQuestionForm.option_d_ru} onChange={(e) => setDrawerQuestionForm({...drawerQuestionForm, option_d: e.target.value, option_d_ru: e.target.value})} placeholder={t('answers.option_ru_placeholder', { option: 'D' })} />
+                    <input className="input-modern" value={drawerQuestionForm.option_d_ky} onChange={(e) => setDrawerQuestionForm({...drawerQuestionForm, option_d_ky: e.target.value})} placeholder={t('answers.option_ky_placeholder', { option: 'D' })} />
                     <select className="input-modern" value={drawerQuestionForm.correct_answer} onChange={(e) => setDrawerQuestionForm({...drawerQuestionForm, correct_answer: e.target.value})}>
-                      <option value="A">Правильный ответ: A</option>
-                      <option value="B">Правильный ответ: B</option>
-                      <option value="C">Правильный ответ: C</option>
-                      <option value="D">Правильный ответ: D</option>
+                      <option value="A">{t('answers.correct_option', { option: 'A' })}</option>
+                      <option value="B">{t('answers.correct_option', { option: 'B' })}</option>
+                      <option value="C">{t('answers.correct_option', { option: 'C' })}</option>
+                      <option value="D">{t('answers.correct_option', { option: 'D' })}</option>
                     </select>
-                    <button type="submit" className="w-full rounded-lg bg-green-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-700">Добавить вопрос</button>
+                    <button type="submit" className="w-full rounded-lg bg-green-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-green-700">{t('questions.add')}</button>
                   </div>
                 </form>
 
                 <div className="mb-5 rounded-xl border border-gray-200 bg-white p-4">
-                  <h5 className="mb-2 font-semibold text-gray-900">Массовое добавление</h5>
-                  <textarea className="input-modern min-h-[120px]" value={bulkQuestionsText} onChange={(e) => setBulkQuestionsText(e.target.value)} placeholder="Вопрос | Вариант A | Вариант B | Вариант C | A" />
-                  <p className="mt-1 text-xs text-gray-500">Каждый вопрос с новой строки. Последний столбец A/B/C необязателен.</p>
+                  <h5 className="mb-2 font-semibold text-gray-900">{t('questions.bulk_add')}</h5>
+                  <textarea className="input-modern min-h-[120px]" value={bulkQuestionsText} onChange={(e) => setBulkQuestionsText(e.target.value)} placeholder={t('questions.bulk_placeholder')} />
+                  <p className="mt-1 text-xs text-gray-500">{t('questions.bulk_hint')}</p>
                   <button type="button" className="mt-3 rounded-lg border border-gray-200 bg-white px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={handleBulkCreateQuestions}>
-                    Добавить списком
+                    {t('questions.add_as_list')}
                   </button>
                 </div>
 
@@ -2473,18 +2607,18 @@ const TeacherDashboard = () => {
                     <div key={question.id} className="rounded-xl border border-gray-200 bg-white p-3">
                       <div className="flex items-start justify-between gap-3">
                         <div>
-                          <p className="text-sm font-semibold text-gray-900">#{question.id} {question.text}</p>
-                          <p className="mt-1 text-xs text-gray-500">A: {question.option_a} | B: {question.option_b} | C: {question.option_c}{question.option_d ? ` | D: ${question.option_d}` : ''}</p>
+                          <p className="text-sm font-semibold text-gray-900">#{question.id} {localizeField(question, 'text', language)}</p>
+                          <p className="mt-1 text-xs text-gray-500">A: {localizeField(question, 'option_a', language)} | B: {localizeField(question, 'option_b', language)} | C: {localizeField(question, 'option_c', language)}{localizeField(question, 'option_d', language) ? ` | D: ${localizeField(question, 'option_d', language)}` : ''}</p>
                         </div>
                         <button type="button" className="rounded-lg bg-red-50 px-3 py-1.5 text-xs font-semibold text-red-700 hover:bg-red-100" onClick={() => handleDeleteQuestion(question.id)}>
-                          Удалить
+                          {t('common.delete')}
                         </button>
                       </div>
                     </div>
                   ))}
                   {drawerQuestions.length === 0 && (
                     <div className="rounded-xl border border-dashed border-gray-300 p-6 text-center text-sm text-gray-500">
-                      Вопросы не найдены
+                      {t('questions.not_found')}
                     </div>
                   )}
                 </div>
@@ -2795,7 +2929,7 @@ const TeacherDashboard = () => {
             </div>
 
             {loadingStudents ? (
-              <div className="p-8 text-center text-gray-500">Загрузка...</div>
+              <div className="p-8 text-center text-gray-500">{t('common.loading')}</div>
             ) : students.length === 0 ? (
               <div className="p-8 text-center text-gray-500">Ученики не найдены</div>
             ) : (
@@ -2857,21 +2991,21 @@ const TeacherDashboard = () => {
               className="px-6 py-3 bg-gradient-to-r from-green-600 to-green-500 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200"
               onClick={() => setShowCreateTeacher(!showCreateTeacher)}
             >
-              {showCreateTeacher ? 'Отмена' : 'Создать учителя'}
+              {showCreateTeacher ? t('common.cancel') : t('teachers.create')}
             </button>
             <button
               type="button"
               className="px-6 py-3 bg-white text-gray-800 font-semibold rounded-xl border border-gray-200 shadow-sm hover:bg-gray-50 transition-all duration-200"
               onClick={handleToggleTeacherList}
             >
-              {showTeacherList ? 'Скрыть список' : 'Список учителей'}
+              {showTeacherList ? t('teachers.hide_list') : t('teachers.list')}
             </button>
             <button
               type="button"
               className="px-6 py-3 bg-white text-gray-800 font-semibold rounded-xl border border-gray-200 shadow-sm hover:bg-gray-50 transition-all duration-200"
               onClick={() => setShowCreateTest(!showCreateTest)}
             >
-              {showCreateTest ? 'Отмена' : 'Добавить тест'}
+              {showCreateTest ? t('common.cancel') : t('teachers.add_test')}
             </button>
           </div>
 
@@ -2881,29 +3015,29 @@ const TeacherDashboard = () => {
             <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden mb-6">
               <div className="px-5 py-4 border-b border-gray-200 flex items-center justify-between">
                 <div>
-                  <h4 className="text-xl font-semibold text-gray-900">Список учителей</h4>
-                  <p className="text-sm text-gray-500">Найдено: {teachers.length}</p>
+                  <h4 className="text-xl font-semibold text-gray-900">{t('teachers.list')}</h4>
+                  <p className="text-sm text-gray-500">{t('teachers.found', { count: teachers.length })}</p>
                 </div>
                 <button
                   type="button"
                   onClick={fetchTeachers}
                   className="px-4 py-2 text-sm font-medium rounded-lg bg-gray-100 text-gray-700 hover:bg-gray-200"
                 >
-                  Обновить
+                  {t('common.refresh')}
                 </button>
               </div>
 
               {loadingTeachers ? (
-                <div className="p-8 text-center text-gray-500">Загрузка...</div>
+                <div className="p-8 text-center text-gray-500">{t('common.loading')}</div>
               ) : teachers.length === 0 ? (
-                <div className="p-8 text-center text-gray-500">Учител не найдены</div>
+                <div className="p-8 text-center text-gray-500">{t('teachers.not_found')}</div>
               ) : (
                 <table className="w-full">
                   <thead className="bg-gray-50">
                     <tr>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ФИО</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Логин</th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Стату</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('common.full_name')}</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('login.username')}</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('common.status')}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200">
@@ -2920,7 +3054,7 @@ const TeacherDashboard = () => {
                                 ? 'bg-green-100 text-green-800'
                                 : 'bg-gray-100 text-gray-700'
                             }`}>
-                              {teacher.is_main_teacher ? 'Главный учитель' : 'Учитель'}
+                              {teacher.is_main_teacher ? t('teachers.main') : t('teachers.teacher')}
                             </span>
                           </td>
                         </tr>
@@ -2934,10 +3068,10 @@ const TeacherDashboard = () => {
 
           {showCreateTeacher && (
             <div className="glass-card rounded-2xl p-6 mb-6">
-              <h4 className="text-xl font-semibold text-gray-900 mb-4">Создать нового учителя</h4>
+              <h4 className="text-xl font-semibold text-gray-900 mb-4">{t('teachers.create_new')}</h4>
               <form onSubmit={handleCreateTeacher} className="space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Логин</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">{t('login.username')}</label>
                   <input
                     type="text"
                     className="input-modern"
@@ -2947,7 +3081,7 @@ const TeacherDashboard = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Имя</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">{t('common.first_name')}</label>
                   <input
                     type="text"
                     className="input-modern"
@@ -2957,7 +3091,7 @@ const TeacherDashboard = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Фамилия</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">{t('common.last_name')}</label>
                   <input
                     type="text"
                     className="input-modern"
@@ -2967,7 +3101,7 @@ const TeacherDashboard = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Пароль</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">{t('common.password')}</label>
                   <input
                     type="password"
                     className="input-modern"
@@ -2981,7 +3115,7 @@ const TeacherDashboard = () => {
                   type="submit"
                   className="px-6 py-3 bg-gradient-to-r from-green-600 to-green-500 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200"
                 >
-                  Создать учителя
+                  {t('teachers.create')}
                 </button>
               </form>
             </div>

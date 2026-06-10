@@ -2,10 +2,10 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import axios from 'axios';
-
+import { useLanguage } from '../context/LanguageContext';
 const API_URL = 'http://localhost:8000/api';
-
 const Register = () => {
+  const { t } = useLanguage();
   const [formData, setFormData] = useState({
     username: '',
     email: '',
@@ -19,14 +19,13 @@ const Register = () => {
   const [loading, setLoading] = useState(false);
   const [studentCount, setStudentCount] = useState(0);
   const [maxStudents] = useState(50);
-  
-  const { login } = useAuth();
+  const {
+    login
+  } = useAuth();
   const navigate = useNavigate();
-
   useEffect(() => {
     fetchStudentCount();
   }, []);
-
   const fetchStudentCount = async () => {
     try {
       const response = await axios.get(`${API_URL}/student-count/`);
@@ -35,34 +34,26 @@ const Register = () => {
       console.error('Error fetching student count:', error);
     }
   };
-
-  const handleChange = (e) => {
+  const handleChange = e => {
     setFormData({
       ...formData,
       [e.target.name]: e.target.value
     });
   };
-
-  const handleSubmit = async (e) => {
+  const handleSubmit = async e => {
     e.preventDefault();
     setError('');
     setSuccess('');
-    
     if (formData.role === 'student' && studentCount >= maxStudents) {
       setError(`Достигнут лимит в ${maxStudents} учеников. Регистрация невозможна.`);
       return;
     }
-    
     setLoading(true);
-
     try {
       const response = await axios.post(`${API_URL}/register/`, formData);
-      
       if (response.data.user) {
         setSuccess('Регистрация успешна! Выполняется вход...');
-        
         const loginResult = await login(formData.username, formData.password);
-        
         if (loginResult.success) {
           setTimeout(() => {
             if (formData.role === 'teacher') {
@@ -77,150 +68,82 @@ const Register = () => {
         }
       }
     } catch (error) {
-      const errorMsg = error.response?.data?.error || 
-                      error.response?.data?.username?.[0] || 
-                      error.response?.data?.email?.[0] ||
-                      'Ошибка регистрации';
+      const errorMsg = error.response?.data?.error || error.response?.data?.username?.[0] || error.response?.data?.email?.[0] || 'Ошибка регистрации';
       setError(errorMsg);
     } finally {
       setLoading(false);
     }
   };
-
   const isStudentLimitReached = studentCount >= maxStudents;
-
-  return (
-    <div className="register-container">
+  return <div className="register-container">
       <div className="card shadow">
         <div className="card-body p-4">
           <h2 className="text-center mb-4">Регистрация</h2>
           
-          {isStudentLimitReached && formData.role === 'student' && (
-            <div className="alert alert-warning" role="alert">
+          {isStudentLimitReached && formData.role === 'student' && <div className="alert alert-warning" role="alert">
               Достигнут лимит в {maxStudents} учеников. Новые ученики не могут зарегистрироваться.
-            </div>
-          )}
+            </div>}
           
-          {error && (
-            <div className="alert alert-danger" role="alert">
+          {error && <div className="alert alert-danger" role="alert">
               {error}
-            </div>
-          )}
+            </div>}
           
-          {success && (
-            <div className="alert alert-success" role="alert">
+          {success && <div className="alert alert-success" role="alert">
               {success}
-            </div>
-          )}
+            </div>}
           
           <form onSubmit={handleSubmit}>
             <div className="mb-3">
               <label className="form-label">Роль</label>
-              <select
-                className="form-select"
-                name="role"
-                value={formData.role}
-                onChange={handleChange}
-                required
-              >
+              <select className="form-select" name="role" value={formData.role} onChange={handleChange} required>
                 <option value="student">Ученик</option>
                 <option value="teacher">Учитель</option>
               </select>
-              {formData.role === 'student' && (
-                <small className="text-muted">
+              {formData.role === 'student' && <small className="text-muted">
                   Учеников в системе: {studentCount} / {maxStudents}
-                </small>
-              )}
+                </small>}
             </div>
             
             <div className="row">
               <div className="col-md-6 mb-3">
                 <label className="form-label">Имя</label>
-                <input
-                  type="text"
-                  className="form-control"
-                  name="first_name"
-                  value={formData.first_name}
-                  onChange={handleChange}
-                  placeholder="Введите имя"
-                />
+                <input type="text" className="form-control" name="first_name" value={formData.first_name} onChange={handleChange} placeholder="Введите имя" />
               </div>
               
               <div className="col-md-6 mb-3">
                 <label className="form-label">Фамилия</label>
-                <input
-                  type="text"
-                  className="form-control"
-                  name="last_name"
-                  value={formData.last_name}
-                  onChange={handleChange}
-                  placeholder="Введите фамилию"
-                />
+                <input type="text" className="form-control" name="last_name" value={formData.last_name} onChange={handleChange} placeholder="Введите фамилию" />
               </div>
             </div>
             
             <div className="mb-3">
               <label className="form-label">Имя пользователя *</label>
-              <input
-                type="text"
-                className="form-control"
-                name="username"
-                value={formData.username}
-                onChange={handleChange}
-                required
-                placeholder="Придумайте имя пользователя"
-              />
+              <input type="text" className="form-control" name="username" value={formData.username} onChange={handleChange} required placeholder="Придумайте имя пользователя" />
             </div>
             
             <div className="mb-3">
               <label className="form-label">Email</label>
-              <input
-                type="email"
-                className="form-control"
-                name="email"
-                value={formData.email}
-                onChange={handleChange}
-                placeholder="Введите email"
-              />
+              <input type="email" className="form-control" name="email" value={formData.email} onChange={handleChange} placeholder="Введите email" />
             </div>
             
             <div className="mb-3">
               <label className="form-label">Пароль *</label>
-              <input
-                type="password"
-                className="form-control"
-                name="password"
-                value={formData.password}
-                onChange={handleChange}
-                required
-                minLength="6"
-                placeholder="Придумайте пароль (мин. 6 символов)"
-              />
+              <input type="password" className="form-control" name="password" value={formData.password} onChange={handleChange} required minLength="6" placeholder="Придумайте пароль (мин. 6 символов)" />
             </div>
             
-            <button 
-              type="submit" 
-              className="btn btn-primary w-100"
-              disabled={loading || (isStudentLimitReached && formData.role === 'student')}
-            >
-              {loading ? (
-                <>
+            <button type="submit" className="btn btn-primary w-100" disabled={loading || (isStudentLimitReached && formData.role === 'student')}>
+              {loading ? <>
                   <span className="spinner-border spinner-border-sm me-2"></span>
                   Регистрация...
-                </>
-              ) : (
-                'Зарегистрироваться'
-              )}
+                </> : 'Зарегистрироваться'}
             </button>
           </form>
           
           <div className="text-center mt-3">
-            <p>Уже есть аккаунт? <Link to="/login">Войти</Link></p>
+            <p>{t("auto.f7c55f5866")}<Link to="/login">Войти</Link></p>
           </div>
         </div>
       </div>
-    </div>
-  );
+    </div>;
 };
-
 export default Register;

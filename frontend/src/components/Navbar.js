@@ -1,9 +1,11 @@
 import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 
 const Navbar = () => {
   const { user, logout } = useAuth();
+  const { language, setLanguage, t } = useLanguage();
   const navigate = useNavigate();
   const [isOpen, setIsOpen] = useState(false);
 
@@ -16,6 +18,25 @@ const Navbar = () => {
     if (!user) return '/';
     return user.role === 'teacher' || user.role === 'admin' ? '/teacher/dashboard' : '/student/dashboard';
   };
+
+  const LanguageSwitch = () => (
+    <div className="language-switch" aria-label={t('language.switch')}>
+      {[
+        { value: 'ru', label: t('language.ru'), flag: '🇷🇺' },
+        { value: 'ky', label: t('language.ky'), flag: '🇰🇬' },
+      ].map((item) => (
+        <button
+          key={item.value}
+          type="button"
+          className={`language-switch__option ${language === item.value ? 'is-active' : ''}`}
+          onClick={() => setLanguage(item.value)}
+        >
+          <span className="language-switch__flag">{item.flag}</span>
+          <span>{item.label}</span>
+        </button>
+      ))}
+    </div>
+  );
 
   return (
     <nav className="sticky top-0 z-50 navbar-modern">
@@ -30,12 +51,13 @@ const Navbar = () => {
                 </svg>
               </div>
               <span className="text-xl font-bold bg-gradient-to-r from-green-600 to-green-500 bg-clip-text text-transparent">
-                Тестирование
+                {t('app.title')}
               </span>
             </Link>
           </div>
 
           <div className="hidden md:flex items-center gap-4">
+            <LanguageSwitch />
             {user ? (
               <div className="flex items-center gap-4">
                 <div className="flex items-center gap-3 px-4 py-2 bg-white/50 rounded-xl border border-white/60">
@@ -44,7 +66,7 @@ const Navbar = () => {
                   </div>
                   <div className="flex flex-col">
                     <span className="text-sm font-semibold text-gray-900">
-                      {user.role === 'teacher' ? 'Учитель' : `${user.first_name} ${user.last_name}`}
+                      {user.role === 'teacher' ? t('teachers.teacher') : `${user.first_name} ${user.last_name}`}
                     </span>
                   </div>
                 </div>
@@ -55,7 +77,7 @@ const Navbar = () => {
                   <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
                   </svg>
-                  Выйти
+                  {t('common.logout')}
                 </button>
               </div>
             ) : null}
@@ -81,16 +103,17 @@ const Navbar = () => {
       {isOpen && (
         <div className="md:hidden glass-card border-t border-gray-200">
           <div className="px-4 py-3 space-y-2">
+            <LanguageSwitch />
             {user ? (
               <>
                 <div className="px-3 py-2 text-sm text-gray-600">
-                  {user.role === 'teacher' ? 'Учитель' : `${user.first_name} ${user.last_name}`}
+                  {user.role === 'teacher' ? t('teachers.teacher') : `${user.first_name} ${user.last_name}`}
                 </div>
                 <button
                   onClick={handleLogout}
                   className="w-full text-left px-3 py-2 text-sm text-red-600 hover:bg-red-50 rounded-xl transition-colors"
                 >
-                  Выйти
+                  {t('common.logout')}
                 </button>
               </>
             ) : null}

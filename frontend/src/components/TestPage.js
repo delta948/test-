@@ -1,7 +1,8 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
+import { localizeQuestion, useLanguage } from '../context/LanguageContext';
 import useTestContentProtection from '../hooks/useTestContentProtection';
 
 const API_URL = 'http://localhost:8000/api';
@@ -19,6 +20,7 @@ const TestPage = () => {
   const { attemptId } = useParams();
   const navigate = useNavigate();
   const { logout } = useAuth();
+  const { language, t } = useLanguage();
   useTestContentProtection();
 
   const [questions, setQuestions] = useState([]);
@@ -33,6 +35,10 @@ const TestPage = () => {
   const [deadlineMs, setDeadlineMs] = useState(null);
   const [timeLeftSeconds, setTimeLeftSeconds] = useState(TEST_DURATION_SECONDS);
   const submittedRef = useRef(false);
+  const localizedQuestions = useMemo(
+    () => questions.map((question) => localizeQuestion(question, language)),
+    [questions, language]
+  );
 
   const completeTest = async ({ timedOut = false } = {}) => {
     if (submittedRef.current) return;
@@ -52,8 +58,8 @@ const TestPage = () => {
       const errorMsg =
         err.response?.data?.error ||
         err.response?.data?.detail ||
-        'Ошибка при завершении теста';
-      setCompletionError(errorMsg);
+        t('Ошибка при завершении теста');
+      setCompletionError(t(errorMsg));
       submittedRef.current = false;
     } finally {
       setCompleting(false);
@@ -62,7 +68,7 @@ const TestPage = () => {
 
   const fetchTestData = async () => {
     try {
-      const response = await axios.get(`${API_URL}/student/attempts/${attemptId}/questions/`);
+      const response = await axios.get(`${API_URL}/student/attempts/${attemptId}/questions/?lang=${language}`);
       const apiQuestions = Array.isArray(response.data?.questions) ? response.data.questions : [];
       const answeredIds = response.data?.answered_question_ids || [];
       const savedSelectedAnswers = response.data?.selected_answers || {};
@@ -84,8 +90,8 @@ const TestPage = () => {
         setCurrentIndex(response.data?.current_question_index || 0);
       }
     } catch (err) {
-      const errorMsg = err.response?.data?.error || 'Ошибка загрузки теста';
-      setError(errorMsg);
+      const errorMsg = err.response?.data?.error || t('Ошибка загрузки теста');
+      setError(t(errorMsg));
 
       if (err.response?.status === 404) {
         setTimeout(() => navigate('/student/dashboard'), 2000);
@@ -108,7 +114,7 @@ const TestPage = () => {
       setTimeLeftSeconds(nextTimeLeft);
 
       if (nextTimeLeft <= 0 && !submittedRef.current) {
-        setCompletionError('Время вышло. Тест автоматически завершается с текущими ответами.');
+        setCompletionError(t('Время вышло. Тест автоматически завершается с текущими ответами.'));
         completeTest({ timedOut: true });
       }
     };
@@ -122,7 +128,7 @@ const TestPage = () => {
   const submitAnswer = async (selectedOption) => {
     if (saving || completing) return;
 
-    const currentQuestion = questions[currentIndex];
+    const currentQuestion = localizedQuestions[currentIndex] || questions[currentIndex];
     if (!currentQuestion) return;
 
     setSaving(true);
@@ -142,14 +148,14 @@ const TestPage = () => {
       }));
       localStorage.setItem(`test_progress_${attemptId}`, String(currentIndex + 1));
 
-      if (currentIndex < questions.length - 1) {
+      if (currentIndex < localizedQuestions.length - 1) {
         setCurrentIndex(currentIndex + 1);
       }
     } catch (err) {
-      const errorMsg = err.response?.data?.error || 'Ошибка при сохранении ответа';
-      setError(errorMsg);
+      const errorMsg = err.response?.data?.error || t('Ошибка при сохранении ответа');
+      setError(t(errorMsg));
 
-      if (errorMsg.includes('Время теста истекло')) {
+      if (errorMsg.includes('Время теста истекло') || errorMsg.includes('Тесттин убактысы бүттү')) {
         setTimeout(() => {
           logout();
           navigate('/login', { replace: true });
@@ -161,7 +167,7 @@ const TestPage = () => {
   };
 
   const goToNext = () => {
-    if (currentIndex < questions.length - 1) {
+    if (currentIndex < localizedQuestions.length - 1) {
       const nextIndex = currentIndex + 1;
       setCurrentIndex(nextIndex);
       localStorage.setItem(`test_progress_${attemptId}`, String(nextIndex));
@@ -184,7 +190,7 @@ const TestPage = () => {
   const handleCompleteClick = () => {
     setCompletionError('');
     if (answeredQuestions.length < 1) {
-      setCompletionError('Ответьте хотя бы на один вопрос, чтобы завершить тест');
+      setCompletionError(t('Ответьте хотя бы на один вопрос, чтобы завершить тест'));
       return;
     }
     completeTest();
@@ -194,7 +200,7 @@ const TestPage = () => {
     return (
       <div className="loading-spinner">
         <div className="spinner-modern"></div>
-        <p className="mt-4 text-gray-600 font-medium">Загрузка теста...</p>
+        <p className="mt-4 text-gray-600 font-medium">{t('Загрузка теста...')}</p>
       </div>
     );
   }
@@ -209,10 +215,10 @@ const TestPage = () => {
     );
   }
 
-  const currentQuestion = questions[currentIndex];
+  const currentQuestion = localizedQuestions[currentIndex];
   const isCurrentAnswered = answeredQuestions.includes(currentQuestion?.id);
   const currentSelectedAnswer = selectedAnswers[currentQuestion?.id];
-  const progress = questions.length ? ((currentIndex + 1) / questions.length) * 100 : 0;
+  const progress = localizedQuestions.length ? ((currentIndex + 1) / localizedQuestions.length) * 100 : 0;
   const timeLeftPercent = Math.max(0, Math.min(100, (timeLeftSeconds / TEST_DURATION_SECONDS) * 100));
   const currentAnswers = currentQuestion?.answers || [
     { key: 'A', text: currentQuestion?.option_a },
@@ -238,7 +244,7 @@ const TestPage = () => {
         <div className="mb-4 rounded-xl border border-red-200 bg-red-50 p-4">
           <div className="flex items-center justify-between">
             <span className="text-sm font-semibold text-red-700 animate-pulse">
-              Обратный отсчет
+              {t('Обратный отсчет')}
             </span>
             <span className="font-mono text-2xl font-bold text-red-700 animate-pulse">
               {formatTimeLeft(timeLeftSeconds)}
@@ -254,10 +260,10 @@ const TestPage = () => {
 
         <div className="flex justify-between items-center mb-3">
           <span className="text-lg font-semibold text-gray-800">
-            Вопрос <span className="text-primary-600">{currentIndex + 1}</span> / {questions.length}
+            {t('Вопрос')} <span className="text-primary-600">{currentIndex + 1}</span> / {localizedQuestions.length}
           </span>
           <span className="text-sm text-gray-500 bg-gray-100 px-3 py-1 rounded-full">
-            Отвечено: <span className="font-semibold text-primary-600">{answeredQuestions.length}</span> / {questions.length}
+            {t('Отвечено')}: <span className="font-semibold text-primary-600">{answeredQuestions.length}</span> / {localizedQuestions.length}
           </span>
         </div>
         <div className="progress-bar-modern">
@@ -277,6 +283,7 @@ const TestPage = () => {
                 'bg-gradient-to-r from-blue-500 to-blue-600 text-white hover:from-blue-600 hover:to-blue-700',
                 'bg-gradient-to-r from-emerald-500 to-emerald-600 text-white hover:from-emerald-600 hover:to-emerald-700',
                 'bg-gradient-to-r from-violet-500 to-violet-600 text-white hover:from-violet-600 hover:to-violet-700',
+                'bg-gradient-to-r from-amber-500 to-amber-600 text-white hover:from-amber-600 hover:to-amber-700',
               ];
 
               return (
@@ -301,7 +308,7 @@ const TestPage = () => {
 
           {isCurrentAnswered && (
             <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-xl text-center">
-              <span className="font-medium text-blue-700">Ответ сохранен.</span>
+              <span className="font-medium text-blue-700">{t('Ответ сохранен.')}</span>
             </div>
           )}
 
@@ -311,7 +318,7 @@ const TestPage = () => {
               onClick={goToPrevious}
               disabled={currentIndex === 0 || completing}
             >
-              Назад
+              {t('Назад')}
             </button>
 
             <button
@@ -319,16 +326,16 @@ const TestPage = () => {
               onClick={currentIndex < questions.length - 1 ? goToNext : handleCompleteClick}
               disabled={completing}
             >
-              {currentIndex < questions.length - 1 ? 'Далее' : (completing ? 'Завершение...' : 'Завершить тест')}
+              {currentIndex < localizedQuestions.length - 1 ? t('Далее') : (completing ? t('Завершение...') : t('Завершить тест'))}
             </button>
           </div>
         </div>
       )}
 
       <div className="dashboard-card mt-6">
-        <h6 className="font-semibold text-gray-700 mb-4">Навигация по вопросам</h6>
+        <h6 className="font-semibold text-gray-700 mb-4">{t('Навигация по вопросам')}</h6>
         <div className="flex flex-wrap gap-2">
-          {questions.map((question, index) => (
+          {localizedQuestions.map((question, index) => (
             <button
               key={question.id}
               className={`w-10 h-10 rounded-lg font-medium text-sm transition-all duration-200 ${
@@ -353,7 +360,7 @@ const TestPage = () => {
           onClick={handleCompleteClick}
           disabled={completing}
         >
-          {completing ? 'Завершение...' : 'Завершить тест досрочно'}
+          {completing ? t('Завершение...') : t('Завершить тест досрочно')}
         </button>
       </div>
     </div>

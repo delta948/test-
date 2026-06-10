@@ -3,7 +3,7 @@ from django.http import JsonResponse
 from .views import (
     RegisterView, UserProfileView,
     QuestionTriggerListCreateView, QuestionTriggerDetailView, QuestionTriggerQuestionUploadView,
-    QuestionListCreateView, QuestionDetailView,
+    QuestionListCreateView, QuestionDetailView, QuestionTranslateView,
     TestListCreateView, TestDetailView, TestQuestionsView,
     AvailableTestsView, StartAttemptView, GetTestQuestionsView,
     SubmitAnswerView, CompleteTestView, GetTestResultView,
@@ -47,6 +47,7 @@ urlpatterns = [
     path('triggers/<int:trigger_id>/questions/upload/', QuestionTriggerQuestionUploadView.as_view(), name='trigger-question-upload'),
     
     path('questions/', QuestionListCreateView.as_view(), name='question-list'),
+    path('questions/translate/', QuestionTranslateView.as_view(), name='question-translate'),
     path('questions/<int:pk>/', QuestionDetailView.as_view(), name='question-detail'),
     
     path('tests/', TestListCreateView.as_view(), name='test-list'),
