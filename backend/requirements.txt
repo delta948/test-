@@ -2,5 +2,9 @@ Django==4.2.7
 djangorestframework==3.14.0
 djangorestframework-simplejwt==5.5.1
 django-cors-headers==4.3.0
+whitenoise==6.7.0
+gunicorn==22.0.0
 Pillow==12.2.0
 reportlab==4.2.5
+python-docx==1.1.0
+deep-translator==1.11.4

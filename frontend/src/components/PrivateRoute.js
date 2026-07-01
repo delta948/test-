@@ -23,8 +23,17 @@ const PrivateRoute = ({ children, allowedRoles, requireStudentProfile = false })
     return <Navigate to="/login" replace />;
   }
 
-  if (requireStudentProfile && user.role === 'student' && !user.student_profile_completed) {
-    return <Navigate to="/student/profile" replace />;
+  if (requireStudentProfile && user.role === 'student') {
+    const hasProfile =
+      user.military_rank &&
+      user.management_body &&
+      user.last_name &&
+      user.first_name &&
+      (user.patronymic || user.middle_name);
+
+    if (!hasProfile) {
+      return <Navigate to="/student/profile" replace />;
+    }
   }
 
   return children;

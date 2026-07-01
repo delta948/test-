@@ -2,8 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 import { localizeField, useLanguage } from '../context/LanguageContext';
-
-const API_URL = 'http://localhost:8000/api';
+import API_URL from '../config/api';
 
 const extractArray = (data, key) => {
   if (Array.isArray(data)) return data;
@@ -64,7 +63,8 @@ const emptyStudentForm = {
   last_name: '',
   military_rank: '',
   patronymic: '',
-  password: ''
+  password: '',
+  training_mode: false
 };
 
 const emptyQuestionForm = (triggerId = '') => ({
@@ -155,6 +155,90 @@ const hasRequiredQuestionContent = (question) => (
   })
 );
 
+const csvEscape = (value) => `"${String(value ?? '').replace(/"/g, '""')}"`;
+
+const parseCsvLine = (line) => {
+  const result = [];
+  let current = '';
+  let inQuotes = false;
+
+  for (let i = 0; i < line.length; i += 1) {
+    const char = line[i];
+    const next = line[i + 1];
+
+    if (char === '"' && inQuotes && next === '"') {
+      current += '"';
+      i += 1;
+    } else if (char === '"') {
+      inQuotes = !inQuotes;
+    } else if (char === ',' && !inQuotes) {
+      result.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+
+  result.push(current.trim());
+  return result;
+};
+
+const parseQuestionImportLine = (line) => {
+  const commaParts = parseCsvLine(line);
+  if (commaParts.length > 1) return commaParts;
+  return line.split(';').map((part) => part.trim().replace(/^"|"$/g, '').replace(/""/g, '"'));
+};
+
+const normalizeCsvHeader = (value) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/^\uFEFF/, '')
+    .replace(/\s+/g, '_');
+
+const questionDuplicateKey = (question) =>
+  String(question.text_ru || question.text_ky || question.text || question.question_ru || question.question_kg || '')
+    .trim()
+    .toLowerCase();
+
+const mapQuestionCsvRow = (parts, headers = null) => {
+  if (!headers) {
+    return normalizeQuestionPayload({
+      text: parts[0] || '',
+      option_a: parts[1] || '',
+      option_b: parts[2] || '',
+      option_c: parts[3] || '',
+      option_d: parts[4] || '',
+      correct_answer: (parts[5] || 'A').toUpperCase()
+    });
+  }
+
+  const row = headers.reduce((acc, header, index) => {
+    acc[header] = parts[index] || '';
+    return acc;
+  }, {});
+  const pick = (...keys) => keys.map((key) => row[key]).find((value) => String(value || '').trim()) || '';
+
+  return normalizeQuestionPayload({
+    text: pick('text', 'question', 'вопрос', 'question_ru', 'text_ru', 'question_kg', 'question_ky', 'text_kg', 'text_ky'),
+    text_ru: pick('text_ru', 'question_ru', 'ru_question', 'question', 'вопрос_ru'),
+    text_ky: pick('text_ky', 'text_kg', 'question_ky', 'question_kg', 'kg_question', 'ky_question'),
+    option_a: pick('option_a', 'a', 'answer_a'),
+    option_a_ru: pick('option_a_ru', 'a_ru', 'answer_a_ru'),
+    option_a_ky: pick('option_a_ky', 'option_a_kg', 'a_ky', 'a_kg', 'answer_a_ky', 'answer_a_kg'),
+    option_b: pick('option_b', 'b', 'answer_b'),
+    option_b_ru: pick('option_b_ru', 'b_ru', 'answer_b_ru'),
+    option_b_ky: pick('option_b_ky', 'option_b_kg', 'b_ky', 'b_kg', 'answer_b_ky', 'answer_b_kg'),
+    option_c: pick('option_c', 'c', 'answer_c'),
+    option_c_ru: pick('option_c_ru', 'c_ru', 'answer_c_ru'),
+    option_c_ky: pick('option_c_ky', 'option_c_kg', 'c_ky', 'c_kg', 'answer_c_ky', 'answer_c_kg'),
+    option_d: pick('option_d', 'd', 'answer_d'),
+    option_d_ru: pick('option_d_ru', 'd_ru', 'answer_d_ru'),
+    option_d_ky: pick('option_d_ky', 'option_d_kg', 'd_ky', 'd_kg', 'answer_d_ky', 'answer_d_kg'),
+    correct_answer: (pick('correct_answer', 'correct', 'answer', 'right_answer', 'правильный_ответ') || 'A').toUpperCase()
+  });
+};
+
 const autoTranslateQuestionLocally = (question) => {
   const next = { ...question };
   bilingualFields.forEach((field) => {
@@ -235,6 +319,7 @@ const TeacherDashboard = () => {
   });
   const [selectedQuestions, setSelectedQuestions] = useState([]);
   const [selectedTriggerIds, setSelectedTriggerIds] = useState([]);
+  const [expandedTriggerIds, setExpandedTriggerIds] = useState([]);
   const [showCreateTest, setShowCreateTest] = useState(false);
   const [createTestStep, setCreateTestStep] = useState(1);
   const [questionSearch, setQuestionSearch] = useState('');
@@ -252,6 +337,10 @@ const TeacherDashboard = () => {
   const [triggerQuestionSearch, setTriggerQuestionSearch] = useState('');
   const [drawerQuestionForm, setDrawerQuestionForm] = useState(emptyQuestionForm());
   const [bulkQuestionsText, setBulkQuestionsText] = useState('');
+  const [pendingQuestionSubmit, setPendingQuestionSubmit] = useState(null);
+  const [questionTargetTriggerId, setQuestionTargetTriggerId] = useState('');
+  const [pendingQuestionImportFile, setPendingQuestionImportFile] = useState(null);
+  const [questionImportTargetTriggerId, setQuestionImportTargetTriggerId] = useState('');
   
   const [newTeacher, setNewTeacher] = useState({
     username: '',
@@ -317,9 +406,6 @@ const TeacherDashboard = () => {
       setTests(loadedTests);
       setResults(loadedResults);
       setTriggers(loadedTriggers);
-      if (!newQuestion.trigger_id && loadedTriggers[0]?.id) {
-        setNewQuestion((current) => ({ ...current, trigger_id: loadedTriggers[0].id }));
-      }
       
       // Проверяем, является ли пользователь главным учителем
       const savedUser = JSON.parse(localStorage.getItem('user') || '{}');
@@ -338,7 +424,7 @@ const TeacherDashboard = () => {
 
   const handleCreateQuestion = async (e) => {
     e.preventDefault();
-    if (!newQuestion.trigger_id) {
+    if (false && !newQuestion.trigger_id) {
       alert('Выберите триггер для вопроса');
       return;
     }
@@ -346,6 +432,12 @@ const TeacherDashboard = () => {
       alert('Заполните текст вопроса и варианты A, B, C хотя бы на одном языке');
       return;
     }
+    setPendingQuestionSubmit({
+      payload: normalizeQuestionPayload(newQuestion),
+      editingId: editingQuestionId
+    });
+    setQuestionTargetTriggerId(newQuestion.trigger_id || '');
+    if (pendingQuestionSubmit !== undefined) return;
     try {
       const payload = normalizeQuestionPayload(newQuestion);
       if (editingQuestionId) {
@@ -359,6 +451,35 @@ const TeacherDashboard = () => {
       fetchData();
     } catch (error) {
       console.error('Error creating question:', error);
+    }
+  };
+
+  const confirmQuestionSubmit = async () => {
+    if (!pendingQuestionSubmit) return;
+    if (!questionTargetTriggerId) {
+      alert('Выберите триггер/категорию, куда добавить вопрос');
+      return;
+    }
+
+    try {
+      const payload = {
+        ...pendingQuestionSubmit.payload,
+        trigger_id: questionTargetTriggerId
+      };
+      if (pendingQuestionSubmit.editingId) {
+        await axios.patch(`${API_URL}/questions/${pendingQuestionSubmit.editingId}/`, payload);
+      } else {
+        await axios.post(`${API_URL}/questions/`, payload);
+      }
+      setNewQuestion(emptyQuestionForm());
+      setEditingQuestionId(null);
+      setPendingQuestionSubmit(null);
+      setQuestionTargetTriggerId('');
+      localStorage.removeItem('questionDraft');
+      fetchData();
+    } catch (error) {
+      console.error('Error creating question:', error);
+      alert(error.response?.data?.detail || error.response?.data?.error || 'Ошибка сохранения вопроса');
     }
   };
 
@@ -389,9 +510,11 @@ const TeacherDashboard = () => {
   }, [newQuestion]);
 
   const clearQuestionForm = () => {
-    setNewQuestion(emptyQuestionForm(triggers[0]?.id || ''));
+    setNewQuestion(emptyQuestionForm());
     setEditingQuestionId(null);
     setQuestionPreview(false);
+    setPendingQuestionSubmit(null);
+    setQuestionTargetTriggerId('');
     localStorage.removeItem('questionDraft');
   };
 
@@ -537,6 +660,158 @@ const TeacherDashboard = () => {
     }
   };
 
+  const exportTriggerQuestions = (trigger) => {
+    const triggerQuestions = getTriggerQuestions(trigger);
+    const headers = [
+      'id',
+      'text_ru',
+      'text_ky',
+      'option_a_ru',
+      'option_a_ky',
+      'option_b_ru',
+      'option_b_ky',
+      'option_c_ru',
+      'option_c_ky',
+      'option_d_ru',
+      'option_d_ky',
+      'correct_answer',
+      'trigger_id',
+      'trigger_name'
+    ];
+    const rows = triggerQuestions.map((question) => [
+      question.id,
+      question.text_ru || question.question_ru || question.text || '',
+      question.text_ky || question.question_kg || '',
+      question.option_a_ru || question.option_a || '',
+      question.option_a_ky || question.option_a_kg || '',
+      question.option_b_ru || question.option_b || '',
+      question.option_b_ky || question.option_b_kg || '',
+      question.option_c_ru || question.option_c || '',
+      question.option_c_ky || question.option_c_kg || '',
+      question.option_d_ru || question.option_d || '',
+      question.option_d_ky || question.option_d_kg || '',
+      question.correct_answer || '',
+      trigger.id,
+      trigger.name || ''
+    ]);
+    const content = [
+      headers.join(','),
+      ...rows.map((row) => row.map(csvEscape).join(','))
+    ].join('\n');
+    const blob = new Blob([`\uFEFF${content}`], { type: 'text/csv;charset=utf-8' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${sanitizeFilename(trigger.slug || trigger.name || 'trigger')}-questions.csv`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.URL.revokeObjectURL(url);
+  };
+
+  const handleTriggerQuestionImport = async (file, trigger) => {
+    if (!file || !trigger?.id) return;
+
+    let added = 0;
+    let duplicates = 0;
+    let errors = 0;
+
+    try {
+      if (String(file.name || '').toLowerCase().endsWith('.docx')) {
+        const formData = new FormData();
+        formData.append('file', file);
+        const response = await axios.post(
+          `${API_URL}/triggers/${trigger.id}/questions/import-docx/`,
+          formData,
+          { headers: { 'Content-Type': 'multipart/form-data' } }
+        );
+        added = response.data?.added || 0;
+        duplicates = response.data?.duplicates || 0;
+        errors = response.data?.errors || 0;
+        await fetchData();
+        alert(`Импорт завершён: добавлено ${added}, дубликатов ${duplicates}, ошибок ${errors}`);
+        return;
+      }
+
+      const fileText = await file.text();
+      const rawRows = fileText
+        .split(/\r?\n/)
+        .map((row) => row.trim())
+        .filter(Boolean);
+
+      if (rawRows.length === 0) {
+        alert('Файл пустой');
+        return;
+      }
+
+      const firstRow = parseQuestionImportLine(rawRows[0]).map(normalizeCsvHeader);
+      const hasHeader = firstRow.some((header) => [
+        'text', 'question', 'text_ru', 'question_ru', 'text_ky', 'text_kg',
+        'option_a', 'option_a_ru', 'correct_answer', 'correct'
+      ].includes(header));
+      const headers = hasHeader ? firstRow : null;
+      const rows = hasHeader ? rawRows.slice(1) : rawRows;
+      const existingKeys = new Set(getTriggerQuestions(trigger).map(questionDuplicateKey).filter(Boolean));
+      const importedKeys = new Set();
+
+      for (const row of rows) {
+        const payload = {
+          ...mapQuestionCsvRow(parseQuestionImportLine(row), headers),
+          trigger_id: trigger.id
+        };
+        const duplicateKey = questionDuplicateKey(payload);
+
+        if (!hasRequiredQuestionContent(payload) || !['A', 'B', 'C', 'D'].includes(payload.correct_answer)) {
+          errors += 1;
+          continue;
+        }
+        if (!duplicateKey || existingKeys.has(duplicateKey) || importedKeys.has(duplicateKey)) {
+          duplicates += 1;
+          continue;
+        }
+
+        try {
+          await axios.post(`${API_URL}/questions/`, payload);
+          added += 1;
+          importedKeys.add(duplicateKey);
+        } catch (error) {
+          console.error('Trigger question import row error:', error);
+          errors += 1;
+        }
+      }
+
+      await fetchData();
+      alert(`Импорт завершён: добавлено ${added}, дубликатов ${duplicates}, ошибок ${errors}`);
+    } catch (error) {
+      console.error('Trigger question import error:', error);
+      alert(error.response?.data?.error || `Ошибка импорта: добавлено ${added}, дубликатов ${duplicates}, ошибок ${errors}`);
+    }
+  };
+
+  const openQuestionImportTargetDialog = (event, defaultTrigger = null) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setPendingQuestionImportFile(file);
+    setQuestionImportTargetTriggerId(defaultTrigger?.id ? String(defaultTrigger.id) : '');
+  };
+
+  const confirmQuestionImport = async () => {
+    if (!pendingQuestionImportFile) return;
+    if (!questionImportTargetTriggerId) {
+      alert('Выберите триггер/категорию, куда импортировать вопросы');
+      return;
+    }
+    const selectedTrigger = (triggers || []).find((trigger) => String(trigger.id) === String(questionImportTargetTriggerId));
+    if (!selectedTrigger) {
+      alert('Выбранная категория не найдена');
+      return;
+    }
+    await handleTriggerQuestionImport(pendingQuestionImportFile, selectedTrigger);
+    setPendingQuestionImportFile(null);
+    setQuestionImportTargetTriggerId('');
+  };
+
   const handleCreateTest = async (e) => {
     e.preventDefault();
 
@@ -600,10 +875,10 @@ const TeacherDashboard = () => {
       });
       setShowCreateTeacher(false);
       fetchTeachers();
-      alert('Учитель упешно оздан');
+      alert(t('Экзаменатор успешно создан'));
     } catch (error) {
       console.error('Error creating teacher:', error);
-      alert('Ошибка создания учителя');
+      alert(t('Ошибка создания экзаменатора'));
     }
   };
 
@@ -644,7 +919,7 @@ const TeacherDashboard = () => {
     } catch (error) {
       console.error('Error loading students:', error);
       setStudents([]);
-      setError(error.response?.data?.detail || error.response?.data?.error || 'Ошибка загрузки списка учеников');
+      setError(error.response?.data?.detail || error.response?.data?.error || t('Ошибка загрузки списка учеников'));
     } finally {
       setLoadingStudents(false);
     }
@@ -659,14 +934,14 @@ const TeacherDashboard = () => {
       setNewStudent(emptyStudentForm);
       setShowCreateStudent(false);
       fetchStudents();
-      alert('Ученик упешно оздан');
+      alert(t('Ученик успешно создан'));
     } catch (error) {
       console.error('Error creating student:', error);
       setError(
         error.response?.data?.error ||
         error.response?.data?.username?.[0] ||
         error.response?.data?.detail ||
-        'Ошибка создания ученика'
+        t('Ошибка создания ученика')
       );
     }
   };
@@ -679,7 +954,8 @@ const TeacherDashboard = () => {
       last_name: student.last_name || '',
       military_rank: student.military_rank || '',
       patronymic: student.patronymic || '',
-      password: ''
+      password: '',
+      training_mode: Boolean(student.training_mode)
     });
     setShowCreateStudent(false);
   };
@@ -702,21 +978,21 @@ const TeacherDashboard = () => {
       await axios.patch(`${API_URL}/teacher/students/${editingStudentId}/`, payload);
       cancelEditStudent();
       fetchStudents();
-      alert('Данные ученика обновлены');
+      alert(t('Данные ученика обновлены'));
     } catch (error) {
       console.error('Error updating student:', error);
       setError(
         error.response?.data?.error ||
         error.response?.data?.username?.[0] ||
         error.response?.data?.detail ||
-        'Ошибка обновлени ученика'
+        t('Ошибка обновления экзаменуемого')
       );
     }
   };
 
   const handleDeleteStudent = async (student) => {
     const studentName = `${student.last_name || ''} ${student.first_name || ''}`.trim() || student.username;
-    if (!window.confirm(`Удалить ученика "${studentName}"?`)) {
+    if (!window.confirm(`${t('Удалить ученика')} "${studentName}"?`)) {
       return;
     }
 
@@ -729,7 +1005,7 @@ const TeacherDashboard = () => {
       fetchStudents();
     } catch (error) {
       console.error('Error deleting student:', error);
-      setError(error.response?.data?.detail || error.response?.data?.error || 'Ошибка удалени ученика');
+      setError(error.response?.data?.detail || error.response?.data?.error || t('Ошибка удаления экзаменуемого'));
     }
   };
 
@@ -806,8 +1082,8 @@ const TeacherDashboard = () => {
       `Вопросов: ${test.question_count || testQuestions.length || 100}`,
       `Триггеры: ${formatTriggers(test.triggers) || '-'}`,
       '',
-      ...testQuestions.map((question, index) =>
-        `${index + 1}. ${question.text}\nA. ${question.option_a}\nB. ${question.option_b}\nC. ${question.option_c}${question.option_d ? `\nD. ${question.option_d}` : ''}\nОтвет: ${question.correct_answer}`
+      ...testQuestions.map((question) =>
+        `${question.id}. ${question.text}\nA. ${question.option_a}\nB. ${question.option_b}\nC. ${question.option_c}${question.option_d ? `\nD. ${question.option_d}` : ''}\nОтвет: ${question.correct_answer}`
       )
     ];
     const blob = new Blob([lines.join('\n\n')], { type: 'text/plain;charset=utf-8' });
@@ -938,12 +1214,12 @@ const TeacherDashboard = () => {
     }
   };
 
-  const handleDownloadSummaryPdf = async () => {
+  const handleDownloadSummaryPdf = async (pdfLanguage) => {
     setError(null);
     setSummaryDownloading(true);
 
     try {
-      const params = {};
+      const params = { lang: pdfLanguage };
       if (canDownloadAnyTeacherSummary && summaryTeacherId) {
         params.teacher_id = summaryTeacherId;
       }
@@ -957,7 +1233,7 @@ const TeacherDashboard = () => {
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `summary-report-${summaryTeacherId || 'all'}.pdf`;
+      link.download = `summary-report-${pdfLanguage}-${summaryTeacherId || 'all'}.pdf`;
       document.body.appendChild(link);
       link.click();
       link.remove();
@@ -1145,42 +1421,91 @@ const TeacherDashboard = () => {
               </div>
 
               <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {(triggers || []).map((trigger, index) => {
+                {selectableTriggerCards.map((trigger, index) => {
                   const selected = selectedTriggerIds.includes(trigger.id);
+                  const childTriggers = triggerChildrenByParent[String(trigger.id)] || [];
+                  const triggerId = String(trigger.id);
+                  const isExpanded = expandedTriggerIds.includes(triggerId);
                   return (
-                    <button
+                    <div
                       key={trigger.id}
-                      type="button"
                       className={`rounded-xl border p-4 text-left shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md ${
                         selected
                           ? 'border-green-500 bg-green-50 ring-2 ring-green-100'
                           : 'border-gray-200 bg-white hover:border-green-200'
                       }`}
-                      onClick={() => {
-                        setSelectedTriggerIds((current) =>
-                          current.includes(trigger.id)
-                            ? current.filter(id => id !== trigger.id)
-                            : [...current, trigger.id]
-                        );
-                        setSelectedQuestions([]);
-                        setCreateTestStep(2);
-                      }}
                     >
-                      <div className="mb-3 flex items-start justify-between gap-3">
-                        <span className={`flex h-10 w-10 items-center justify-center rounded-lg ${
-                          selected ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-600'
-                        }`}>
-                          <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={triggerIcons[index % triggerIcons.length]} />
-                          </svg>
-                        </span>
-                        <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-gray-700 shadow-sm">
-                          {t('questions.count_label', { count: trigger.question_count || 0 })}
-                        </span>
-                      </div>
-                      <h6 className="mb-1 text-base font-semibold text-gray-900">{trigger.name}</h6>
-                      <p className="line-clamp-2 text-sm text-gray-500">{trigger.description || trigger.slug || t('questions.category')}</p>
-                    </button>
+                      <button
+                        type="button"
+                        className="w-full text-left"
+                        onClick={() => {
+                          if (childTriggers.length > 0) {
+                            setExpandedTriggerIds((current) =>
+                              current.includes(triggerId)
+                                ? current.filter(id => id !== triggerId)
+                                : [...current, triggerId]
+                            );
+                          } else {
+                            setSelectedTriggerIds((current) =>
+                              current.includes(trigger.id)
+                                ? current.filter(id => id !== trigger.id)
+                                : [...current, trigger.id]
+                            );
+                          }
+                          setSelectedQuestions([]);
+                          setCreateTestStep(2);
+                        }}
+                      >
+                        <div className="mb-3 flex items-start justify-between gap-3">
+                          <span className={`flex h-10 w-10 items-center justify-center rounded-lg ${
+                            selected ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-600'
+                          }`}>
+                            <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={triggerIcons[index % triggerIcons.length]} />
+                            </svg>
+                          </span>
+                          <span className="rounded-full bg-white px-2.5 py-1 text-xs font-semibold text-gray-700 shadow-sm">
+                            {t('questions.count_label', { count: trigger.question_count || 0 })}
+                          </span>
+                        </div>
+                        <div className="mb-1 flex items-center justify-between gap-2">
+                          <h6 className="text-base font-semibold text-gray-900">{trigger.name}</h6>
+                          {childTriggers.length > 0 && (
+                            <span className="text-lg font-semibold text-gray-400">{isExpanded ? '-' : '+'}</span>
+                          )}
+                        </div>
+                        <p className="line-clamp-2 text-sm text-gray-500">{trigger.description || trigger.slug || t('questions.category')}</p>
+                      </button>
+                      {childTriggers.length > 0 && isExpanded && (
+                        <div className="mt-3 space-y-2 border-l-2 border-green-100 pl-4">
+                          {childTriggers.map((child) => {
+                            const childSelected = selectedTriggerIds.includes(child.id);
+                            return (
+                              <button
+                                key={child.id}
+                                type="button"
+                                className={`w-full rounded-lg border px-3 py-2 text-left text-sm font-semibold transition ${
+                                  childSelected
+                                    ? 'border-green-500 bg-green-100 text-green-800'
+                                    : 'border-gray-200 bg-gray-50 text-gray-800 hover:border-green-200 hover:bg-green-50'
+                                }`}
+                                onClick={() => {
+                                  setSelectedTriggerIds((current) =>
+                                    current.includes(child.id)
+                                      ? current.filter(id => id !== child.id)
+                                      : [...current, child.id]
+                                  );
+                                  setSelectedQuestions([]);
+                                  setCreateTestStep(2);
+                                }}
+                              >
+                                {child.name}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
                   );
                 })}
               </div>
@@ -1317,7 +1642,7 @@ const TeacherDashboard = () => {
                         <div className="min-w-0 flex-1">
                           <div className="mb-1 flex flex-wrap items-center gap-2">
                             <span className="rounded-full bg-gray-100 px-2 py-0.5 text-xs font-semibold text-gray-600">
-                              № {(safePage - 1) * questionsPerPage + index + 1}
+                              ? {question.id}
                             </span>
                             <span className="rounded-full bg-green-50 px-2 py-0.5 text-xs font-semibold text-green-700">
                               {triggerName}
@@ -1543,7 +1868,7 @@ const TeacherDashboard = () => {
 
       return `
         <tr style="background:${bg}">
-          <td>${index + 1}</td>
+          <td>${question.id}</td>
           <td>${escapeHtml(question.text || '')}</td>
           <td>A. ${escapeHtml(question.option_a || '')}<br />B. ${escapeHtml(question.option_b || '')}<br />C. ${escapeHtml(question.option_c || '')}</td>
           <td>${escapeHtml(selectedKey || '-')} ${selectedText ? `- ${escapeHtml(selectedText)}` : ''}</td>
@@ -1577,7 +1902,7 @@ const TeacherDashboard = () => {
           <table>
             <thead>
               <tr>
-                <th>№</th>
+                <th>?</th>
                 <th>${escapeHtml(t('questions.question'))}</th>
                 <th>${escapeHtml(t('answers.options'))}</th>
                 <th>${escapeHtml(t('answers.student_answer'))}</th>
@@ -1646,6 +1971,17 @@ const TeacherDashboard = () => {
       if (triggerSort === 'created_asc') return new Date(a.created_at || 0) - new Date(b.created_at || 0);
       return new Date(b.created_at || 0) - new Date(a.created_at || 0);
     });
+  const triggerChildrenByParent = (triggers || []).reduce((acc, trigger) => {
+    if (!trigger.parent_id) return acc;
+    const parentId = String(trigger.parent_id);
+    acc[parentId] = [...(acc[parentId] || []), trigger];
+    return acc;
+  }, {});
+  Object.values(triggerChildrenByParent).forEach((children) => {
+    children.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ru'));
+  });
+  const visibleTriggerCards = visibleTriggers.filter((trigger) => !trigger.parent_id);
+  const selectableTriggerCards = (triggers || []).filter((trigger) => !trigger.parent_id);
 
   const drawerQuestions = triggerDrawer
     ? getTriggerQuestions(triggerDrawer).filter((question) =>
@@ -1964,7 +2300,7 @@ const TeacherDashboard = () => {
                           <div className="flex items-start justify-between gap-3">
                             <div>
                               <div className="text-sm font-semibold text-gray-900">
-                                #{index + 1} {answer.question?.text}
+                                #{fullQuestion?.id || answer.question?.id} {answer.question?.text}
                               </div>
                               <div className={`mt-2 inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
                                 answer.is_correct
@@ -2168,9 +2504,9 @@ const TeacherDashboard = () => {
                   <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => setTestPreview(null)}>{t('common.close')}</button>
                 </div>
                 <div className="space-y-3">
-                  {(testPreview.questions || []).slice(0, 100).map((question, index) => (
+                  {(testPreview.questions || []).slice(0, 100).map((question) => (
                     <div key={question.id} className="rounded-xl border border-gray-200 p-4">
-                      <p className="font-semibold text-gray-900">{index + 1}. {question.text}</p>
+                      <p className="font-semibold text-gray-900">{question.id}. {question.text}</p>
                       <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
                         {['A', 'B', 'C', 'D'].map((key) => question[`option_${key.toLowerCase()}`] && (
                           <div key={key} className={`rounded-lg px-3 py-2 text-sm ${question.correct_answer === key ? 'bg-green-600 text-white' : 'bg-gray-50 text-gray-700'}`}>{key}. {question[`option_${key.toLowerCase()}`]}</div>
@@ -2233,7 +2569,7 @@ const TeacherDashboard = () => {
               ))}
               <div>
                 <label className="mb-2 block text-sm font-semibold text-gray-700">Триггер</label>
-                <select className="input-modern" value={newQuestion.trigger_id} onChange={(e) => setNewQuestion({...newQuestion, trigger_id: e.target.value})} required>
+                <select className="input-modern" value={newQuestion.trigger_id} onChange={(e) => setNewQuestion({...newQuestion, trigger_id: e.target.value})}>
                   <option value="">Выберите триггер</option>
                   {(triggers || []).map(trigger => <option key={trigger.id} value={trigger.id}>{trigger.name}</option>)}
                 </select>
@@ -2257,7 +2593,38 @@ const TeacherDashboard = () => {
                   </div>
                 </div>
               )}
-              <div className="lg:col-span-2 flex justify-end">
+              <div className="lg:col-span-2 flex flex-wrap justify-end gap-2">
+                <label className="cursor-pointer rounded-lg border border-gray-200 px-5 py-3 text-sm font-bold text-gray-700 shadow-sm hover:bg-gray-50">
+                  Импорт вопросов
+                  <input
+                    type="file"
+                    accept=".csv,.docx,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                    className="hidden"
+                    onChange={(event) => {
+                      const selectedTrigger = (triggers || []).find((trigger) => String(trigger.id) === String(newQuestion.trigger_id));
+                      if (!selectedTrigger) {
+                        alert('Выберите триггер/категорию перед импортом вопросов');
+                        event.target.value = '';
+                        return;
+                      }
+                      openQuestionImportTargetDialog(event, selectedTrigger);
+                    }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  className="rounded-lg border border-gray-200 px-5 py-3 text-sm font-bold text-gray-700 shadow-sm hover:bg-gray-50"
+                  onClick={() => {
+                    const selectedTrigger = (triggers || []).find((trigger) => String(trigger.id) === String(newQuestion.trigger_id));
+                    if (!selectedTrigger) {
+                      alert('Выберите триггер/категорию для экспорта вопросов');
+                      return;
+                    }
+                    exportTriggerQuestions(selectedTrigger);
+                  }}
+                >
+                  Экспорт вопросов
+                </button>
                 <button type="submit" className="rounded-lg bg-green-600 px-5 py-3 text-sm font-bold text-white shadow-sm hover:bg-green-700">{editingQuestionId ? 'Сохранить вопрос' : 'Создать вопрос'}</button>
               </div>
             </form>
@@ -2479,7 +2846,7 @@ const TeacherDashboard = () => {
             <div className="mb-4 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <h4 className="text-xl font-semibold text-gray-900">{t('triggers.triggers')}</h4>
-                <p className="text-sm text-gray-500">{t('triggers.found_from', { shown: visibleTriggers.length, total: (triggers || []).length })}</p>
+                <p className="text-sm text-gray-500">{t('triggers.found_from', { shown: visibleTriggerCards.length, total: (triggers || []).length })}</p>
               </div>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-4">
                 <input className="input-modern" value={triggerSearchName} onChange={(e) => setTriggerSearchName(e.target.value)} placeholder={t('triggers.search_by_name')} />
@@ -2499,7 +2866,11 @@ const TeacherDashboard = () => {
             </div>
 
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-              {visibleTriggers.map((trigger) => (
+              {visibleTriggerCards.map((trigger) => {
+                const triggerId = String(trigger.id);
+                const childTriggers = triggerChildrenByParent[triggerId] || [];
+                const isExpanded = expandedTriggerIds.includes(triggerId);
+                return (
                 <div key={trigger.id} className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md">
                   {editingTriggerId === trigger.id ? (
                     <form onSubmit={handleUpdateTrigger} className="space-y-3">
@@ -2520,7 +2891,24 @@ const TeacherDashboard = () => {
                       <div className="mb-4 flex items-start justify-between gap-3">
                         <div>
                           <div className="mb-2 flex flex-wrap items-center gap-2">
-                            <h5 className="text-lg font-bold text-gray-900">{t(trigger.name)}</h5>
+                            {childTriggers.length > 0 ? (
+                              <button
+                                type="button"
+                                className="flex items-center gap-2 text-left text-lg font-bold text-gray-900"
+                                onClick={() => {
+                                  setExpandedTriggerIds((current) =>
+                                    current.includes(triggerId)
+                                      ? current.filter((id) => id !== triggerId)
+                                      : [...current, triggerId]
+                                  );
+                                }}
+                              >
+                                <span>{t(trigger.name)}</span>
+                                <span className="text-gray-400">{isExpanded ? '-' : '+'}</span>
+                              </button>
+                            ) : (
+                              <h5 className="text-lg font-bold text-gray-900">{t(trigger.name)}</h5>
+                            )}
                             <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ${trigger.is_active ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'}`}>
                               {trigger.is_active ? t('common.active') : t('common.inactive')}
                             </span>
@@ -2533,6 +2921,46 @@ const TeacherDashboard = () => {
                         </div>
                       </div>
                       <p className="mb-4 min-h-[40px] text-sm text-gray-600">{trigger.description ? t(trigger.description) : t('triggers.no_description')}</p>
+                      {childTriggers.length > 0 && isExpanded && (
+                        <div className="mb-4 rounded-lg border border-emerald-100 bg-emerald-50 p-3">
+                          <p className="mb-2 text-xs font-semibold uppercase text-emerald-700">{t('triggers.subblocks')}</p>
+                          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                            {childTriggers.map((child) => (
+                              <div
+                                key={child.id}
+                                className="rounded-lg border border-emerald-100 bg-white px-3 py-2 text-sm text-gray-800"
+                              >
+                                <button
+                                  type="button"
+                                  className="block w-full text-left font-semibold hover:text-emerald-700"
+                                  onClick={() => openTriggerQuestions(child)}
+                                >
+                                  <span className="block">{t(child.name)}</span>
+                                  <span className="mt-1 block text-xs font-normal text-gray-500">{child.question_count || 0} {t('questions.questions')}</span>
+                                </button>
+                                <div className="mt-2 flex flex-wrap gap-2">
+                                  <label className="cursor-pointer rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50">
+                                    Импорт вопросов
+                                    <input
+                                      type="file"
+                                      accept=".csv,.docx,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                                      className="hidden"
+                                      onChange={(event) => openQuestionImportTargetDialog(event, child)}
+                                    />
+                                  </label>
+                                  <button
+                                    type="button"
+                                    className="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50"
+                                    onClick={() => exportTriggerQuestions(child)}
+                                  >
+                                    Экспорт вопросов
+                                  </button>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
                       <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
                         <div className="rounded-lg bg-gray-50 p-3"><p className="text-xs text-gray-500">{t('tests.attempts_done')}</p><p className="font-bold text-gray-900">{trigger.attempts_count || 0}</p></div>
                         <div className="rounded-lg bg-gray-50 p-3"><p className="text-xs text-gray-500">{t('stats.average_score')}</p><p className="font-bold text-gray-900">{trigger.average_score || 0}</p></div>
@@ -2543,13 +2971,24 @@ const TeacherDashboard = () => {
                         <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => startEditTrigger(trigger)}>{t('common.edit')}</button>
                         <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => openTriggerQuestions(trigger)}>{t('common.view')}</button>
                         <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => openTriggerQuestions(trigger)}>{t('questions.section')}</button>
+                        <label className="cursor-pointer rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50">
+                          Импорт вопросов
+                          <input
+                            type="file"
+                            accept=".csv,.docx,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                            className="hidden"
+                            onChange={(event) => openQuestionImportTargetDialog(event, trigger)}
+                          />
+                        </label>
+                        <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => exportTriggerQuestions(trigger)}>Экспорт вопросов</button>
                         <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => openTriggerQuestions(trigger)}>{t('stats.statistics')}</button>
                         <button type="button" className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-100" onClick={() => handleDeleteTrigger(trigger)}>{t('common.delete')}</button>
                       </div>
                     </>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
@@ -2632,12 +3071,12 @@ const TeacherDashboard = () => {
         <div>
           <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
             <div>
-              <h4 className="text-xl font-semibold text-gray-900">Результаты учеников</h4>
+              <h4 className="text-xl font-semibold text-gray-900">{t('Результаты учеников')}</h4>
             </div>
             <div className="flex flex-wrap items-end gap-3">
               {canDownloadAnyTeacherSummary && (
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Учитель</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">{t('Экзаменатор')}</label>
                   <select
                     className="input-modern min-w-[220px]"
                     value={summaryTeacherId}
@@ -2648,7 +3087,7 @@ const TeacherDashboard = () => {
                     }}
                     onChange={(e) => setSummaryTeacherId(e.target.value)}
                   >
-                    <option value="">Все учителя</option>
+                    <option value="">{t('Все экзаменаторы')}</option>
                     {teachers.map((teacher) => {
                       const teacherName = `${teacher.first_name || ''} ${teacher.last_name || ''}`.trim() || teacher.username;
                       return (
@@ -2663,30 +3102,54 @@ const TeacherDashboard = () => {
               <button
                 type="button"
                 className="px-6 py-3 bg-gradient-to-r from-green-600 to-green-500 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-200"
-                onClick={handleDownloadSummaryPdf}
+                onClick={() => handleDownloadSummaryPdf('ru')}
                 disabled={summaryDownloading}
               >
-                {summaryDownloading ? 'Формирование...' : 'Скачать сводную ведомость'}
+                {summaryDownloading ? t('Формирование...') : 'Скачать PDF на русском'}
+              </button>
+              <button
+                type="button"
+                className="px-6 py-3 bg-white text-gray-800 font-semibold rounded-xl border border-gray-200 shadow-sm hover:bg-gray-50 disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-200"
+                onClick={() => handleDownloadSummaryPdf('kg')}
+                disabled={summaryDownloading}
+              >
+                {summaryDownloading ? t('Формирование...') : 'Кыргызча PDF жүктөө'}
               </button>
             </div>
           </div>
           {(results || []).length === 0 ? (
             <div className="text-center py-16 bg-white rounded-2xl border border-gray-200">
-              <p className="text-gray-900 font-medium text-lg">Нет результатов</p>
-              <p className="text-sm text-gray-500 mt-2">Ученики ещё не прошли тесты</p>
+              <p className="text-gray-900 font-medium text-lg">{t('Нет результатов')}</p>
+              <p className="text-sm text-gray-500 mt-2">{t('Ученики ещё не прошли тесты')}</p>
             </div>
           ) : (
-            <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
-              <table className="w-full">
+            <div className="bg-white rounded-2xl border border-gray-200 shadow-sm">
+              <div
+                className="w-full max-w-full overflow-x-auto overscroll-x-contain"
+                style={{ overflowX: 'auto', overflowY: 'visible' }}
+              >
+              <table
+                className="shrink-0 table-fixed"
+                style={{ width: '1460px', minWidth: '1460px', tableLayout: 'fixed' }}
+              >
+                <colgroup>
+                  <col style={{ width: '200px' }} />
+                  <col style={{ width: '300px' }} />
+                  <col style={{ width: '240px' }} />
+                  <col style={{ width: '140px' }} />
+                  <col style={{ width: '120px' }} />
+                  <col style={{ width: '240px' }} />
+                  <col style={{ width: '220px' }} />
+                </colgroup>
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Ученик</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Тест</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Триггеры</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Результат</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Процент</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Оценка</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Дата</th>
+                    <th className="w-[200px] min-w-[200px] px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('Ученик')}</th>
+                    <th className="w-[300px] min-w-[300px] px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('Тест')}</th>
+                    <th className="w-[240px] min-w-[240px] px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('Триггеры')}</th>
+                    <th className="w-[140px] min-w-[140px] px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('Результат')}</th>
+                    <th className="w-[120px] min-w-[120px] px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('Процент')}</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '240px', minWidth: '240px', whiteSpace: 'nowrap', overflow: 'visible' }}>{t('Оценка')}</th>
+                    <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" style={{ width: '220px', minWidth: '220px', whiteSpace: 'nowrap', overflow: 'visible' }}>{t('Дата')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
@@ -2694,46 +3157,59 @@ const TeacherDashboard = () => {
                     const percentage = result.total_questions > 0 
                       ? Math.round((result.score / result.total_questions) * 100) 
                       : 0;
-                    let grade = 'Неудовлетворительно';
+                    let grade = t('Неудовлетворительно');
                     let gradeColor = 'text-red-600 bg-red-50';
                     if (percentage >= 90) {
-                      grade = 'Отлично';
+                      grade = t('Отлично');
                       gradeColor = 'text-green-600 bg-green-50';
                     } else if (percentage >= 70) {
-                      grade = 'Хорошо';
+                      grade = t('Хорошо');
                       gradeColor = 'text-blue-600 bg-blue-50';
                     } else if (percentage >= 50) {
-                      grade = 'Удовлетворительно';
+                      grade = t('Удовлетворительно');
                       gradeColor = 'text-yellow-600 bg-yellow-50';
                     }
                     return (
                       <tr key={result.id} className="hover:bg-gray-50">
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <div className="text-sm font-medium text-gray-900">{result.student_name}</div>
-                          <div className="text-sm text-gray-500">@{result.student_username}</div>
+                        <td className="w-[200px] min-w-[200px] px-4 py-4 align-top">
+                          <div className="text-sm font-medium text-gray-900 break-words">{result.student_name}</div>
+                          <div className="text-sm text-gray-500 break-all">@{result.student_username}</div>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        <td className="w-[300px] min-w-[300px] px-4 py-4 align-top text-sm text-gray-900 break-words">
                           {result.test_title}
                         </td>
-                        <td className="px-6 py-4 text-sm text-gray-500">
+                        <td className="w-[240px] min-w-[240px] px-4 py-4 align-top text-sm text-gray-500 break-words">
                           {formatTriggers(result.triggers) || '-'}
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
+                        <td className="w-[140px] min-w-[140px] px-4 py-4 align-top">
                           <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
                             percentage >= 70 ? 'bg-green-100 text-green-800' : percentage >= 50 ? 'bg-yellow-100 text-yellow-800' : 'bg-red-100 text-red-800'
                           }`}>
                             {result.score} / {result.total_questions}
                           </span>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                        <td className="w-[120px] min-w-[120px] px-4 py-4 align-top text-sm text-gray-900">
                           {percentage}%
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${gradeColor}`}>
+                        <td
+                          className="px-4 py-4 align-top"
+                          style={{ width: '240px', minWidth: '240px', overflow: 'visible', whiteSpace: 'nowrap' }}
+                        >
+                          <span
+                            className={`rounded-full text-xs font-medium leading-none ${gradeColor}`}
+                            style={{
+                              display: 'inline-block',
+                              flexShrink: 0,
+                              whiteSpace: 'nowrap',
+                              overflow: 'visible',
+                              padding: '4px 12px',
+                              lineHeight: 1
+                            }}
+                          >
                             {grade}
                           </span>
                         </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                        <td className="px-4 py-4 align-top text-sm text-gray-500" style={{ width: '220px', minWidth: '220px', whiteSpace: 'nowrap', overflow: 'visible' }}>
                           {result.completed_at ? new Date(result.completed_at).toLocaleString('ru-RU') : '-'}
                         </td>
                       </tr>
@@ -2741,6 +3217,7 @@ const TeacherDashboard = () => {
                   })}
                 </tbody>
               </table>
+              </div>
             </div>
           )}
         </div>
@@ -2754,23 +3231,23 @@ const TeacherDashboard = () => {
               className="px-6 py-3 bg-gradient-to-r from-green-600 to-green-500 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200"
               onClick={() => setShowCreateStudent(!showCreateStudent)}
             >
-              {showCreateStudent ? 'Отмена' : 'Создать ученика'}
+              {showCreateStudent ? t('common.cancel') : t('students.create')}
             </button>
             <button
               type="button"
               className="px-6 py-3 bg-white text-gray-800 font-semibold rounded-xl border border-gray-200 shadow-sm hover:bg-gray-50 transition-all duration-200"
               onClick={fetchStudents}
             >
-              Обновить список
+              {t('common.refresh')}
             </button>
           </div>
 
           {showCreateStudent && (
             <div className="glass-card rounded-2xl p-6 mb-6">
-              <h4 className="text-xl font-semibold text-gray-900 mb-4">Создать аккаунт ученика</h4>
+              <h4 className="text-xl font-semibold text-gray-900 mb-4">{t('students.create_account')}</h4>
               <form onSubmit={handleCreateStudent} className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Логин</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">{t('Логин')}</label>
                   <input
                     type="text"
                     className="input-modern"
@@ -2780,7 +3257,7 @@ const TeacherDashboard = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Пароль</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">{t('Пароль')}</label>
                   <input
                     type="password"
                     className="input-modern"
@@ -2791,7 +3268,7 @@ const TeacherDashboard = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Имя</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">{t('Имя')}</label>
                   <input
                     type="text"
                     className="input-modern"
@@ -2801,7 +3278,7 @@ const TeacherDashboard = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Фамилия</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">{t('Фамилия')}</label>
                   <input
                     type="text"
                     className="input-modern"
@@ -2811,7 +3288,7 @@ const TeacherDashboard = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Воинское звание</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">{t('Воинское звание')}</label>
                   <input
                     type="text"
                     className="input-modern"
@@ -2820,7 +3297,7 @@ const TeacherDashboard = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Отчество</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">{t('Отчество')}</label>
                   <input
                     type="text"
                     className="input-modern"
@@ -2828,12 +3305,21 @@ const TeacherDashboard = () => {
                     onChange={(e) => setNewStudent({...newStudent, patronymic: e.target.value})}
                   />
                 </div>
+                <label className="md:col-span-2 flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                    checked={Boolean(newStudent.training_mode)}
+                    onChange={(e) => setNewStudent({...newStudent, training_mode: e.target.checked})}
+                  />
+                  <span data-no-translate>Training mode: highlight correct answers</span>
+                </label>
                 <div className="md:col-span-2">
                   <button
                     type="submit"
                     className="px-6 py-3 bg-gradient-to-r from-green-600 to-green-500 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200"
                   >
-                    Создать ученика
+                    {t('students.create')}
                   </button>
                 </div>
               </form>
@@ -2842,10 +3328,10 @@ const TeacherDashboard = () => {
 
           {editingStudentId && (
             <div className="glass-card rounded-2xl p-6 mb-6">
-              <h4 className="text-xl font-semibold text-gray-900 mb-4">Редактировать ученика</h4>
+              <h4 className="text-xl font-semibold text-gray-900 mb-4">{t('students.edit')}</h4>
               <form onSubmit={handleUpdateStudent} className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Логин</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">{t('Логин')}</label>
                   <input
                     type="text"
                     className="input-modern"
@@ -2855,18 +3341,18 @@ const TeacherDashboard = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Новый пароль</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">{t('Новый пароль')}</label>
                   <input
                     type="password"
                     className="input-modern"
                     value={editingStudent.password}
                     onChange={(e) => setEditingStudent({...editingStudent, password: e.target.value})}
                     minLength="6"
-                    placeholder="Оставьте пустым, чтобы не менять"
+                    placeholder={t('Оставьте пустым, чтобы не менять')}
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Имя</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">{t('Имя')}</label>
                   <input
                     type="text"
                     className="input-modern"
@@ -2876,7 +3362,7 @@ const TeacherDashboard = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Фамилия</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">{t('Фамилия')}</label>
                   <input
                     type="text"
                     className="input-modern"
@@ -2886,7 +3372,7 @@ const TeacherDashboard = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Воинское звание</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">{t('Воинское звание')}</label>
                   <input
                     type="text"
                     className="input-modern"
@@ -2895,7 +3381,7 @@ const TeacherDashboard = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">Отчество</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">{t('Отчество')}</label>
                   <input
                     type="text"
                     className="input-modern"
@@ -2903,19 +3389,28 @@ const TeacherDashboard = () => {
                     onChange={(e) => setEditingStudent({...editingStudent, patronymic: e.target.value})}
                   />
                 </div>
+                <label className="md:col-span-2 flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm font-medium text-amber-900">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-amber-300 text-amber-600 focus:ring-amber-500"
+                    checked={Boolean(editingStudent.training_mode)}
+                    onChange={(e) => setEditingStudent({...editingStudent, training_mode: e.target.checked})}
+                  />
+                  <span data-no-translate>Training mode: highlight correct answers</span>
+                </label>
                 <div className="md:col-span-2 flex flex-wrap gap-3">
                   <button
                     type="submit"
                     className="px-6 py-3 bg-gradient-to-r from-green-600 to-green-500 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-200"
                   >
-                    Сохранить
+                    {t('Сохранить')}
                   </button>
                   <button
                     type="button"
                     className="px-6 py-3 bg-white text-gray-800 font-semibold rounded-xl border border-gray-200 shadow-sm hover:bg-gray-50 transition-all duration-200"
                     onClick={cancelEditStudent}
                   >
-                    Отмена
+                    {t('common.cancel')}
                   </button>
                 </div>
               </form>
@@ -2924,25 +3419,26 @@ const TeacherDashboard = () => {
 
           <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
             <div className="px-5 py-4 border-b border-gray-200">
-              <h4 className="text-xl font-semibold text-gray-900">Ученики</h4>
-              <p className="text-sm text-gray-500">Найдено: {students.length}</p>
+              <h4 className="text-xl font-semibold text-gray-900">{t('students.students')}</h4>
+              <p className="text-sm text-gray-500">{t('students.found', { count: students.length })}</p>
             </div>
 
             {loadingStudents ? (
               <div className="p-8 text-center text-gray-500">{t('common.loading')}</div>
             ) : students.length === 0 ? (
-              <div className="p-8 text-center text-gray-500">Ученики не найдены</div>
+              <div className="p-8 text-center text-gray-500">{t('students.not_found')}</div>
             ) : (
               <table className="w-full">
                 <thead className="bg-gray-50">
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">ФИО</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Логин</th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Звание</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('ФИО')}</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('Логин')}</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('Звание')}</th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider" data-no-translate>Mode</th>
                     {canManageTeachers && (
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Учитель</th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">{t('teachers.teacher')}</th>
                     )}
-                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Действия</th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">{t('common.actions')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-200">
@@ -2953,6 +3449,15 @@ const TeacherDashboard = () => {
                         <td className="px-6 py-4 text-sm font-medium text-gray-900">{studentName}</td>
                         <td className="px-6 py-4 text-sm text-gray-500">@{student.username}</td>
                         <td className="px-6 py-4 text-sm text-gray-500">{student.military_rank || '-'}</td>
+                        <td className="px-6 py-4 text-sm text-gray-500">
+                          {student.training_mode ? (
+                            <span className="rounded-full bg-amber-100 px-2.5 py-1 text-xs font-semibold text-amber-800" data-no-translate>
+                              Training
+                            </span>
+                          ) : (
+                            <span className="text-gray-400" data-no-translate>Exam</span>
+                          )}
+                        </td>
                         {canManageTeachers && (
                           <td className="px-6 py-4 text-sm text-gray-500">{student.teacher_name || '-'}</td>
                         )}
@@ -2963,14 +3468,14 @@ const TeacherDashboard = () => {
                               className="px-3 py-1.5 bg-white text-gray-700 font-medium rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors"
                               onClick={() => startEditStudent(student)}
                             >
-                              Изменить
+                              {t('common.edit')}
                             </button>
                             <button
                               type="button"
                               className="px-3 py-1.5 bg-red-50 text-red-700 font-medium rounded-lg border border-red-100 hover:bg-red-100 transition-colors"
                               onClick={() => handleDeleteStudent(student)}
                             >
-                              Удалить
+                              {t('common.delete')}
                             </button>
                           </div>
                         </td>
@@ -3120,6 +3625,92 @@ const TeacherDashboard = () => {
               </form>
             </div>
           )}
+        </div>
+      )}
+
+      {pendingQuestionSubmit && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+            <h4 className="text-xl font-bold text-gray-900">Куда добавить вопрос?</h4>
+            <p className="mt-1 text-sm text-gray-500">
+              Выберите триггер/категорию. Вопрос будет сохранён только после подтверждения.
+            </p>
+            <select
+              className="input-modern mt-4"
+              value={questionTargetTriggerId}
+              onChange={(e) => setQuestionTargetTriggerId(e.target.value)}
+              autoFocus
+            >
+              <option value="">Выберите триггер/категорию</option>
+              {(triggers || []).map((trigger) => (
+                <option key={trigger.id} value={trigger.id}>
+                  {trigger.name}
+                </option>
+              ))}
+            </select>
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                onClick={() => {
+                  setPendingQuestionSubmit(null);
+                  setQuestionTargetTriggerId('');
+                }}
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                className="rounded-lg bg-green-600 px-4 py-2 text-sm font-bold text-white hover:bg-green-700"
+                onClick={confirmQuestionSubmit}
+              >
+                Добавить в выбранную категорию
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {pendingQuestionImportFile && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4">
+          <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
+            <h4 className="text-xl font-bold text-gray-900">Куда импортировать вопросы?</h4>
+            <p className="mt-1 text-sm text-gray-500">
+              Файл: <span className="font-semibold text-gray-700">{pendingQuestionImportFile.name}</span>
+            </p>
+            <select
+              className="input-modern mt-4"
+              value={questionImportTargetTriggerId}
+              onChange={(e) => setQuestionImportTargetTriggerId(e.target.value)}
+              autoFocus
+            >
+              <option value="">Выберите триггер/категорию</option>
+              {(triggers || []).map((trigger) => (
+                <option key={trigger.id} value={trigger.id}>
+                  {trigger.name}
+                </option>
+              ))}
+            </select>
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50"
+                onClick={() => {
+                  setPendingQuestionImportFile(null);
+                  setQuestionImportTargetTriggerId('');
+                }}
+              >
+                Отмена
+              </button>
+              <button
+                type="button"
+                className="rounded-lg bg-green-600 px-4 py-2 text-sm font-bold text-white hover:bg-green-700"
+                onClick={confirmQuestionImport}
+              >
+                Импортировать в выбранную категорию
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

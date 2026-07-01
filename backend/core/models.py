@@ -9,11 +9,12 @@ from datetime import timedelta
 
 class User(AbstractUser):
     ROLE_CHOICES = [
-        ('teacher', 'Учитель'),
-        ('student', 'Ученик'),
+        ('teacher', 'экзаменатор'),
+        ('student', 'экзаменуемый'),
     ]
     role = models.CharField(max_length=10, choices=ROLE_CHOICES, default='student')
-    is_main_teacher = models.BooleanField(default=False, verbose_name='Главный учитель')
+    is_main_teacher = models.BooleanField(default=False, verbose_name='Главный экзаменатор')
+    training_mode = models.BooleanField(default=False, verbose_name='Training mode')
     created_by_teacher = models.ForeignKey(
         'self',
         on_delete=models.SET_NULL,
@@ -21,7 +22,7 @@ class User(AbstractUser):
         blank=True,
         related_name='created_students',
         limit_choices_to={'role': 'teacher'},
-        verbose_name='Создавший учитель',
+        verbose_name='Создавший экзаменатор',
     )
     
     groups = models.ManyToManyField(
@@ -60,16 +61,18 @@ def deactivate_students_before_teacher_delete(sender, instance, **kwargs):
 class StudentProfile(models.Model):
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='student_profile')
     military_rank = models.CharField(max_length=100, blank=True, verbose_name='Воинское звание')
-    patronymic = models.CharField(max_length=150, blank=True, verbose_name='Отчество')
+    management_body = models.CharField(max_length=255, blank=True, verbose_name='Орган управления')
+    middle_name = models.CharField(max_length=150, blank=True, verbose_name='Отчество')
     created_at = models.DateTimeField(auto_now_add=True)
 
     @property
     def is_complete(self):
         return all([
-            self.military_rank.strip(),
-            self.user.last_name.strip(),
-            self.user.first_name.strip(),
-            self.patronymic.strip(),
+            str(self.military_rank or '').strip(),
+            str(self.management_body or '').strip(),
+            str(self.user.last_name or '').strip(),
+            str(self.user.first_name or '').strip(),
+            str(self.middle_name or '').strip(),
         ])
     
     def __str__(self):
@@ -79,13 +82,21 @@ class StudentProfile(models.Model):
 class QuestionTrigger(models.Model):
     DEFAULT_TRIGGERS = [
         ('applicant', 'Абитуриент'),
-        ('sergeant_warrant', 'Контрольный срез знаний сержантов и прапорщиков'),
-        ('junior_officer', 'Контрольный срез знаний младшего офицерского состава'),
-        ('senior_officer', 'Контрольный срез знаний старшего офицерского состава'),
+        ('officer', 'Контрольный срез знаний офицерского состава'),
+        ('reserve_officer', 'Офицеры запаса'),
+        ('special-training', 'Специальная подготовка'),
     ]
 
     name = models.CharField(max_length=255, unique=True, verbose_name='Триггер')
     slug = models.SlugField(max_length=64, unique=True, verbose_name='Код')
+    parent = models.ForeignKey(
+        'self',
+        on_delete=models.CASCADE,
+        null=True,
+        blank=True,
+        related_name='children',
+        verbose_name='Родительский триггер',
+    )
     description = models.TextField(blank=True, verbose_name='Описание')
     is_active = models.BooleanField(default=True, db_index=True, verbose_name='Активен')
     created_at = models.DateTimeField(auto_now_add=True)
@@ -100,30 +111,30 @@ class QuestionTrigger(models.Model):
 
 class Question(models.Model):
     TRIGGER_APPLICANT = 'applicant'
+    TRIGGER_OFFICER = 'officer'
     TRIGGER_SERGEANT = 'sergeant_warrant'
     TRIGGER_JUNIOR_OFFICER = 'junior_officer'
     TRIGGER_SENIOR_OFFICER = 'senior_officer'
     TRIGGER_CHOICES = [
         (TRIGGER_APPLICANT, 'Абитуриент'),
-        (TRIGGER_SERGEANT, 'Контрольный срез знаний сержантов и прапорщиков'),
-        (TRIGGER_JUNIOR_OFFICER, 'Контрольный срез знаний младшего офицерского состава'),
-        (TRIGGER_SENIOR_OFFICER, 'Контрольный срез знаний старшего офицерского состава'),
+        (TRIGGER_OFFICER, 'Контрольный срез знаний офицерского состава'),
     ]
     text = models.TextField(verbose_name='Текст вопроса')
     text_ru = models.TextField(blank=True, default='', verbose_name='Текст вопроса на русском')
     text_ky = models.TextField(blank=True, default='', verbose_name='Текст вопроса на кыргызском')
-    option_a = models.CharField(max_length=255, verbose_name='Вариант A')
-    option_a_ru = models.CharField(max_length=255, blank=True, default='', verbose_name='Вариант A на русском')
-    option_a_ky = models.CharField(max_length=255, blank=True, default='', verbose_name='Вариант A на кыргызском')
-    option_b = models.CharField(max_length=255, verbose_name='Вариант B')
-    option_b_ru = models.CharField(max_length=255, blank=True, default='', verbose_name='Вариант B на русском')
-    option_b_ky = models.CharField(max_length=255, blank=True, default='', verbose_name='Вариант B на кыргызском')
-    option_c = models.CharField(max_length=255, verbose_name='Вариант C')
-    option_c_ru = models.CharField(max_length=255, blank=True, default='', verbose_name='Вариант C на русском')
-    option_c_ky = models.CharField(max_length=255, blank=True, default='', verbose_name='Вариант C на кыргызском')
-    option_d = models.CharField(max_length=255, blank=True, default='', verbose_name='Вариант D')
-    option_d_ru = models.CharField(max_length=255, blank=True, default='', verbose_name='Вариант D на русском')
-    option_d_ky = models.CharField(max_length=255, blank=True, default='', verbose_name='Вариант D на кыргызском')
+    option_a = models.TextField(verbose_name='Вариант A')
+    option_a_ru = models.TextField(blank=True, default='', verbose_name='Вариант A на русском')
+    option_a_ky = models.TextField(blank=True, default='', verbose_name='Вариант A на кыргызском')
+    option_b = models.TextField(verbose_name='Вариант B')
+    option_b_ru = models.TextField(blank=True, default='', verbose_name='Вариант B на русском')
+    option_b_ky = models.TextField(blank=True, default='', verbose_name='Вариант B на кыргызском')
+    option_c = models.TextField(verbose_name='Вариант C')
+    option_c_ru = models.TextField(blank=True, default='', verbose_name='Вариант C на русском')
+    option_c_ky = models.TextField(blank=True, default='', verbose_name='Вариант C на кыргызском')
+    option_d = models.TextField(blank=True, default='', verbose_name='Вариант D')
+    option_d_ru = models.TextField(blank=True, default='', verbose_name='Вариант D на русском')
+    option_d_ky = models.TextField(blank=True, default='', verbose_name='Вариант D на кыргызском')
+    explanation = models.TextField(blank=True, default='', verbose_name='Пояснение')
     
     CORRECT_CHOICES = [
         ('A', 'Вариант A'),
@@ -149,8 +160,11 @@ class Question(models.Model):
     def __str__(self):
         return f"Вопрос #{self.id}: {self.text[:50]}..."
 
-
 class Test(models.Model):
+    LANGUAGE_CHOICES = [
+        ('ky', 'Кыргызский'),
+        ('ru', 'Русский'),
+    ]
     title = models.CharField(max_length=255, verbose_name='Название теста')
     teacher = models.ForeignKey(User, on_delete=models.CASCADE, related_name='created_tests')
     questions = models.ManyToManyField(Question, related_name='tests', limit_choices_to={'created_by': models.F('teacher')})
@@ -164,6 +178,8 @@ class Test(models.Model):
         related_name='tests',
     )
     is_active = models.BooleanField(default=True, verbose_name='Активен')
+    language = models.CharField(max_length=2, choices=LANGUAGE_CHOICES, default='ky', verbose_name='Язык теста')
+    is_translation_from_ky = models.BooleanField(default=False, verbose_name='Перевод с кыргызского на русский')
     
     class Meta:
         ordering = ['-created_at']
@@ -183,6 +199,14 @@ class Attempt(models.Model):
     
     student = models.ForeignKey(User, on_delete=models.CASCADE, related_name='attempts')
     test = models.ForeignKey(Test, on_delete=models.CASCADE, related_name='attempts')
+    
+    # Snapshot of student data at the time of attempt
+    military_rank = models.CharField(max_length=100, blank=True, verbose_name='Воинское звание')
+    management_body = models.CharField(max_length=255, blank=True, verbose_name='Орган управления')
+    last_name = models.CharField(max_length=150, blank=True, verbose_name='Фамилия')
+    first_name = models.CharField(max_length=150, blank=True, verbose_name='Имя')
+    middle_name = models.CharField(max_length=150, blank=True, verbose_name='Отчество')
+
     selected_trigger = models.ForeignKey(
         QuestionTrigger,
         on_delete=models.PROTECT,
@@ -199,6 +223,7 @@ class Attempt(models.Model):
     )
     questions = models.ManyToManyField(Question, related_name='attempts', blank=True)
     question_order = models.JSONField(default=list, blank=True)
+    answer_order = models.JSONField(default=dict, blank=True)
     triggers_snapshot = models.JSONField(default=list, blank=True)
     status = models.CharField(max_length=15, choices=STATUS_CHOICES, default='in_progress')
     score = models.PositiveIntegerField(default=0, verbose_name='Результат')

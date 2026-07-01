@@ -3,8 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
-
-const API_URL = 'http://localhost:8000/api';
+import API_URL from '../config/api';
 
 const TestResultsPage = () => {
   const { id } = useParams();

@@ -180,14 +180,12 @@ export const useLanguage = () => {
 
 export const localizeField = (item, field, language) => {
   if (!item) return '';
-  const languageSuffixes = language === 'ru' ? ['ru'] : ['ky', 'kg'];
-  const fallbackSuffixes = language === 'ru' ? ['ky', 'kg'] : ['ru'];
   const semanticField = field === 'text' ? 'question' : field;
   const cleanValue = (value) => {
     const text = String(value ?? '').trim();
     return text && !isCorruptedTranslation(text) ? value : '';
   };
-  const getLocalizedValue = (suffixes) => {
+  const getSuffixedValue = (suffixes) => {
     for (const suffix of suffixes) {
       const directValue = cleanValue(item[`${field}_${suffix}`]);
       if (directValue) return directValue;
@@ -197,7 +195,11 @@ export const localizeField = (item, field, language) => {
     return '';
   };
 
-  return getLocalizedValue(languageSuffixes) || getLocalizedValue(fallbackSuffixes) || cleanValue(item[field]) || '';
+  if (language === 'ru') {
+    return getSuffixedValue(['ru']) || cleanValue(item[field]) || '';
+  }
+
+  return getSuffixedValue(['ky', 'kg']) || cleanValue(item[field]) || '';
 };
 
 export const localizeQuestion = (question, language) => {

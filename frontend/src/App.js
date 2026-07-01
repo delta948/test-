@@ -55,14 +55,7 @@ const AppShell = () => {
                 </PrivateRoute>
               }
             />
-            <Route
-              path="/result/:attemptId"
-              element={
-                <PrivateRoute allowedRoles={['student']} requireStudentProfile>
-                  <TestResult />
-                </PrivateRoute>
-              }
-            />
+            
             <Route
               path="/test-results/:id"
               element={

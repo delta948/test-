@@ -1,15 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import axios from 'axios';
-import { useAuth } from '../context/AuthContext';
 import { localizeQuestion, useLanguage } from '../context/LanguageContext';
-
-const API_URL = 'http://localhost:8000/api';
+import API_URL from '../config/api';
 
 const TestResult = () => {
   const { attemptId } = useParams();
-  const navigate = useNavigate();
-  const { logout } = useAuth();
   const { language, t } = useLanguage();
   
   const [result, setResult] = useState(null);
@@ -32,17 +28,6 @@ const TestResult = () => {
       setLoading(false);
     }
   };
-
-  useEffect(() => {
-    if (!result || loading || error) return undefined;
-
-    const timeoutId = window.setTimeout(() => {
-      logout();
-      navigate('/login', { replace: true });
-    }, 15000);
-
-    return () => window.clearTimeout(timeoutId);
-  }, [error, loading, logout, navigate, result]);
 
   const getScoreColor = (score, total) => {
     const percentage = (score / total) * 100;
@@ -93,9 +78,14 @@ const TestResult = () => {
             
             <div className="mb-4">
               <h4>{t(attempt.test.title)}</h4>
-              <p className="text-muted">
-                {t('Завершен')}: {attempt.completed_at ? new Date(attempt.completed_at).toLocaleString() : '-'}
-              </p>
+              <div className="mt-3 p-3 bg-light rounded">
+                <p className="mb-1"><strong>{t('ФИО')}:</strong> {attempt.last_name} {attempt.first_name} {attempt.patronymic}</p>
+                <p className="mb-1"><strong>{t('Воинское звание')}:</strong> {attempt.military_rank}</p>
+                <p className="mb-1"><strong>{t('Орган управления')}:</strong> {attempt.management_body}</p>
+                <p className="mb-0 text-muted">
+                  <strong>{t('Завершен')}:</strong> {attempt.completed_at ? new Date(attempt.completed_at).toLocaleString() : '-'}
+                </p>
+              </div>
             </div>
 
             <div className={`display-1 fw-bold mb-3 ${getScoreColor(correct_count, total_questions)}`}>
@@ -155,9 +145,9 @@ const TestResult = () => {
                 </tr>
               </thead>
               <tbody>
-                {attempt.answers.map((answer, index) => (
+                {attempt.answers.map((answer) => (
                   <tr key={answer.id}>
-                    <td>{index + 1}</td>
+                    <td>{answer.question?.id}</td>
                     <td>{localizeQuestion(answer.question, language).text.substring(0, 50)}...</td>
                     <td>
                       <span className="badge bg-secondary">{answer.selected_option}</span>

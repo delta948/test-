@@ -66,7 +66,7 @@ const Navbar = () => {
                   </div>
                   <div className="flex flex-col">
                     <span className="text-sm font-semibold text-gray-900">
-                      {user.role === 'teacher' ? t('teachers.teacher') : `${user.first_name} ${user.last_name}`}
+                      {user.role === 'teacher' || user.role === 'admin' ? t('teachers.teacher') : `${user.first_name} ${user.last_name}`}
                     </span>
                   </div>
                 </div>

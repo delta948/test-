@@ -22,7 +22,8 @@ def create_teacher():
             'email': 'admin@test.com',
             'role': 'teacher',
             'first_name': 'Админ',
-            'last_name': 'Учитель'
+            'last_name': 'Экзаменатор'
+
         }
     )
     if created:

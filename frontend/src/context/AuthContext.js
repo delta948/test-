@@ -1,9 +1,18 @@
 import React, { createContext, useState, useContext, useEffect } from 'react';
 import axios from 'axios';
+import API_URL from '../config/api';
+import { clearLoginAndTestSession } from '../utils/authSession';
 
 const AuthContext = createContext(null);
 
-const API_URL = 'http://localhost:8000/api';
+export const saveStudentProfileFallback = (profileData, errorMessage = 'Ошибка сохранения данных') => {
+  localStorage.setItem('student_profile', JSON.stringify(profileData));
+  return {
+    success: true,
+    local: true,
+    error: errorMessage,
+  };
+};
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
@@ -29,7 +38,12 @@ export const AuthProvider = ({ children }) => {
     const token = localStorage.getItem('token');
     const savedUser = localStorage.getItem('user');
     if (savedUser) {
-      setUser(JSON.parse(savedUser));
+      try {
+        const parsedUser = JSON.parse(savedUser);
+        setUser(parsedUser);
+      } catch (error) {
+        localStorage.removeItem('user');
+      }
     }
     if (token) {
       axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
@@ -87,27 +101,66 @@ export const AuthProvider = ({ children }) => {
   };
 
   const updateStudentProfile = async (profileData) => {
+    const token = localStorage.getItem('token');
+
+    if (!token) {
+      console.warn('Нет токена, сохранение в localStorage');
+      return saveStudentProfileFallback(profileData, 'Токен отсутствует');
+    }
+
     try {
-      const response = await axios.post(`${API_URL}/student/profile/`, profileData);
+      const response = await axios.post(`${API_URL}/student/profile/`, profileData, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
       setUser(response.data);
       localStorage.setItem('user', JSON.stringify(response.data));
       return { success: true, data: response.data };
     } catch (error) {
-      return {
-        success: false,
-        error:
-          error.response?.data?.non_field_errors?.[0] ||
-          error.response?.data?.detail ||
-          'Ошибка сохранения данных'
-      };
+      if (error.response?.status === 401) {
+        try {
+          const refreshToken = localStorage.getItem('refreshToken');
+          if (!refreshToken) {
+            throw new Error('Токен обновления отсутствует');
+          }
+
+          const refreshResponse = await axios.post(`${API_URL}/token/refresh/`, {
+            refresh: refreshToken,
+          });
+
+          const nextToken = refreshResponse.data?.access;
+          if (!nextToken) {
+            throw new Error('Сервер не вернул новый access token');
+          }
+
+          localStorage.setItem('token', nextToken);
+          axios.defaults.headers.common['Authorization'] = `Bearer ${nextToken}`;
+
+          return await updateStudentProfile(profileData);
+        } catch (refreshError) {
+          console.warn('Не удалось обновить токен, сохраняем локально', refreshError);
+        }
+      }
+
+      console.error('Profile update error:', error.response?.data);
+      let errorMessage = 'Ошибка сохранения данных';
+      if (error.response?.data) {
+        if (typeof error.response.data === 'object') {
+          const fieldErrors = Object.entries(error.response.data)
+            .map(([field, errors]) => `${field}: ${Array.isArray(errors) ? errors.join(', ') : errors}`)
+            .join('; ');
+          if (fieldErrors) errorMessage = fieldErrors;
+        } else if (typeof error.response.data === 'string') {
+          errorMessage = error.response.data;
+        }
+      }
+
+      return saveStudentProfileFallback(profileData, errorMessage);
     }
   };
 
-  const logout = () => {
-    localStorage.removeItem('token');
-    localStorage.removeItem('refreshToken');
-    localStorage.removeItem('user');
-    delete axios.defaults.headers.common['Authorization'];
+  const logout = (attemptId) => {
+    clearLoginAndTestSession(attemptId);
     setUser(null);
   };
 

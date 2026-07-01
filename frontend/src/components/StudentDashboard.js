@@ -3,10 +3,32 @@ import { useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 import { localizeQuestion, useLanguage } from '../context/LanguageContext';
+import API_URL from '../config/api';
 import useTestContentProtection from '../hooks/useTestContentProtection';
 
-const API_URL = 'http://localhost:8000/api';
-const TEST_DURATION_SECONDS = 60 * 60;
+const TOTAL_TIME = 3000; // 50 minutes
+const ACTIVE_TEST_CONFIG_STORAGE_KEY = 'activeTestConfig';
+const VISIBLE_TEST_CATEGORY_SLUGS = new Set([
+  'applicant',
+  'officer',
+  'reserve_officer',
+  'special-training',
+  'communications-training',
+  'engineering-training',
+  'logistics-training',
+  'armament-training',
+  'air-defense-training',
+]);
+const HIDDEN_TEST_CATEGORY_SLUGS = new Set(['sergeant_warrant', 'junior_officer', 'senior_officer']);
+const VARIABLE_QUESTION_COUNT_SLUGS = new Set([
+  'special-training',
+  'communications-training',
+  'engineering-training',
+  'logistics-training',
+  'armament-training',
+  'air-defense-training',
+]);
+const SPECIAL_TRAINING_SLUG = 'special-training';
 
 const getAuthHeaders = () => {
   const token = localStorage.getItem('token');
@@ -15,7 +37,11 @@ const getAuthHeaders = () => {
 
 const normalizeAnswers = (question) => {
   if (Array.isArray(question?.answers)) {
-    return question.answers;
+    return question.answers.map((answer, index) => ({
+      ...answer,
+      key: String.fromCharCode(65 + index),
+      original_key: answer.original_key || answer.key || String.fromCharCode(65 + index),
+    }));
   }
 
   return [
@@ -40,26 +66,75 @@ const extractArray = (data, key) => {
   return [];
 };
 
-const formatTimeLeft = (seconds) => {
+const isVisibleTestingCategory = (trigger) => {
+  const slug = String(trigger?.slug || '').trim();
+  return VISIBLE_TEST_CATEGORY_SLUGS.has(slug) && !HIDDEN_TEST_CATEGORY_SLUGS.has(slug);
+};
+
+const getTriggerQuestionCount = (trigger) => {
+  return Number(trigger?.question_count || 0);
+};
+const getRequiredQuestionCount = () => 100;
+
+const getSelectedCategoriesQuestionError = (categories) => {
+  const requiredQuestionCount = getRequiredQuestionCount();
+  const specialTrainingCategories = categories.filter((category) =>
+    VARIABLE_QUESTION_COUNT_SLUGS.has(category.slug)
+  );
+  const selectedParent = specialTrainingCategories.find(
+    (category) => category.slug === SPECIAL_TRAINING_SLUG
+  );
+  const selectedQuestionCount = selectedParent
+    ? categories
+        .filter((category) => (
+          category.slug === SPECIAL_TRAINING_SLUG ||
+          !VARIABLE_QUESTION_COUNT_SLUGS.has(category.slug)
+        ))
+        .reduce((sum, category) => sum + category.question_count, 0)
+    : categories.reduce((sum, category) => sum + category.question_count, 0);
+
+  if (selectedQuestionCount >= requiredQuestionCount) {
+    return null;
+  }
+
+  if (specialTrainingCategories.length === 1 && !selectedParent) {
+    return 'В выбранной подкатегории меньше 100 вопросов';
+  }
+
+  return 'Для данной категории недостаточно вопросов';
+};
+
+const getErrorMessage = (err, fallback) => (
+  err.response?.data?.message ||
+  err.response?.data?.error?.message ||
+  err.response?.data?.error ||
+  err.response?.data?.detail ||
+  err.message ||
+  fallback
+);
+
+const formatTime = (seconds) => {
   const safeSeconds = Math.max(0, seconds);
-  const hours = Math.floor(safeSeconds / 3600);
-  const minutes = Math.floor((safeSeconds % 3600) / 60);
-  const secs = safeSeconds % 60;
-  return `${hours}:${String(minutes).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+  const h = Math.floor(safeSeconds / 3600);
+  const m = Math.floor((safeSeconds % 3600) / 60);
+  const s = safeSeconds % 60;
+  return `${h}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 };
 
 const StudentDashboard = () => {
-  const { user, logout } = useAuth();
+  const { logout } = useAuth();
   const { language, t } = useLanguage();
   useTestContentProtection();
   const [tests, setTests] = useState([]);
+  const [categoryTriggers, setCategoryTriggers] = useState([]);
   const [selectedTriggerIds, setSelectedTriggerIds] = useState([]);
+  const [expandedTriggerIds, setExpandedTriggerIds] = useState([]);
   const [questions, setQuestions] = useState([]);
   const [answers, setAnswers] = useState({});
   const [savedAnswerIds, setSavedAnswerIds] = useState([]);
-  const [attemptId, setAttemptId] = useState(null);
-  const [deadlineMs, setDeadlineMs] = useState(null);
-  const [timeLeftSeconds, setTimeLeftSeconds] = useState(TEST_DURATION_SECONDS);
+  const [attemptId] = useState(null);
+  const [deadlineMs] = useState(null);
+  const [remainingSeconds, setRemainingSeconds] = useState(TOTAL_TIME);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
@@ -78,34 +153,59 @@ const StudentDashboard = () => {
   const availableTriggers = useMemo(() => {
     const triggersById = new Map();
 
-    safeTests.forEach((test) => {
-      const testTriggers = Array.isArray(test?.triggers) ? test.triggers : [];
-      testTriggers.forEach((trigger) => {
-        if (!trigger?.id) return;
-        const triggerId = String(trigger.id);
-        if (!triggersById.has(triggerId)) {
-          triggersById.set(triggerId, trigger);
-        }
-      });
+    categoryTriggers.forEach((trigger) => {
+      if (!trigger?.id || !isVisibleTestingCategory(trigger)) return;
+      const triggerId = String(trigger.id);
+      if (!triggersById.has(triggerId)) {
+        triggersById.set(triggerId, trigger);
+      }
     });
 
     return Array.from(triggersById.values());
-  }, [safeTests]);
+  }, [categoryTriggers]);
+  const availableChildrenByParent = useMemo(() => {
+    const childrenByParent = {};
+    availableTriggers.forEach((trigger) => {
+      if (!trigger.parent_id) return;
+      const parentId = String(trigger.parent_id);
+      childrenByParent[parentId] = [...(childrenByParent[parentId] || []), trigger];
+    });
+    Object.values(childrenByParent).forEach((children) => {
+      children.sort((a, b) => String(a.name || '').localeCompare(String(b.name || ''), 'ru'));
+    });
+    return childrenByParent;
+  }, [availableTriggers]);
+  const availableTriggerCards = useMemo(
+    () => availableTriggers.filter((trigger) => !trigger.parent_id),
+    [availableTriggers]
+  );
 
   const selectedTestForTriggers = useMemo(() => {
     if (!safeTests.length || selectedTriggerIds.length === 0) return null;
 
-    return (
-      safeTests.find((test) => {
-        const triggerIds = new Set(
-          (Array.isArray(test?.triggers) ? test.triggers : []).map((trigger) => String(trigger.id))
-        );
-        return selectedTriggerIds.every((triggerId) => triggerIds.has(String(triggerId)));
-      }) ||
-      safeTests[0] ||
-      null
+    const selectedTriggers = availableTriggers.filter((trigger) =>
+      selectedTriggerIds.includes(String(trigger.id))
     );
-  }, [safeTests, selectedTriggerIds]);
+    const selectedSlugs = selectedTriggers.map((trigger) => trigger.slug);
+    const isSpecialTrainingSelection = selectedSlugs.length > 0 &&
+      selectedSlugs.every((slug) => VARIABLE_QUESTION_COUNT_SLUGS.has(slug));
+
+    if (isSpecialTrainingSelection) {
+      const parentTest = safeTests.find((test) =>
+        (Array.isArray(test?.triggers) ? test.triggers : []).some(
+          (trigger) => trigger.slug === SPECIAL_TRAINING_SLUG
+        )
+      );
+      if (parentTest) return parentTest;
+    }
+
+    return safeTests.find((test) => {
+      const triggerIds = new Set(
+        (Array.isArray(test?.triggers) ? test.triggers : []).map((trigger) => String(trigger.id))
+      );
+      return selectedTriggerIds.every((triggerId) => triggerIds.has(String(triggerId)));
+    }) || null;
+  }, [availableTriggers, safeTests, selectedTriggerIds]);
 
   useEffect(() => {
     answersRef.current = answers || {};
@@ -116,86 +216,66 @@ const StudentDashboard = () => {
     setError(null);
 
     try {
-      const testsRes = await axios.get(`${API_URL}/student/tests/`, {
-        headers: getAuthHeaders(),
-      });
-
-      console.log('user:', user);
-      console.log('API response:', testsRes.data);
+      const [testsRes, triggersRes] = await Promise.all([
+        axios.get(`${API_URL}/student/tests/`, {
+          headers: getAuthHeaders(),
+        }),
+        axios.get(`${API_URL}/triggers/`, {
+          headers: getAuthHeaders(),
+        }),
+      ]);
 
       const loadedTests = extractArray(testsRes.data, 'tests');
-      console.log('tests:', loadedTests);
+      const loadedTriggers = extractArray(triggersRes.data, 'triggers').filter(isVisibleTestingCategory);
+
+      console.log('[testing] available tests API response', testsRes.data);
+      console.log('[testing] triggers API response', triggersRes.data);
+      console.log('[testing] visible categories', loadedTriggers.map((trigger) => ({
+        id: trigger.id,
+        slug: trigger.slug,
+        name: trigger.name,
+        question_count: getTriggerQuestionCount(trigger),
+      })));
 
       setTests(loadedTests);
+      setCategoryTriggers(loadedTriggers);
 
-      const testId = loadedTests[0]?.id;
-
-      if (!loadedTests.length) {
+      if (!loadedTriggers.length) {
         setQuestions([]);
         setError(t('Нет доступных категорий тестирования'));
         return;
       }
 
-      return;
-
-      // eslint-disable-next-line no-unreachable
-      const startRes = await axios.post(
-        `${API_URL}/student/tests/${testId}/start/`,
-        {},
-        { headers: getAuthHeaders() }
-      );
-
-      const newAttemptId = startRes.data?.attempt?.id;
-      if (!newAttemptId) {
-        throw new Error(t('Не удалось создать попытку теста'));
-      }
-
-      const expiresAt = startRes.data?.expires_at;
-      const startedAt = startRes.data?.attempt?.started_at;
-      const nextDeadlineMs = expiresAt
-        ? Date.parse(expiresAt)
-        : Date.parse(startedAt) + TEST_DURATION_SECONDS * 1000;
-
-      submittedRef.current = false;
-      setAttemptId(newAttemptId);
-      setDeadlineMs(nextDeadlineMs);
-      setTimeLeftSeconds(Math.max(0, Math.ceil((nextDeadlineMs - Date.now()) / 1000)));
-
-      const questionsRes = await axios.get(
-        `${API_URL}/student/attempts/${newAttemptId}/questions/`,
-        { headers: getAuthHeaders() }
-      );
-
-      const apiQuestions = Array.isArray(questionsRes.data?.questions)
-        ? questionsRes.data.questions
-        : [];
-      const answeredIds = Array.isArray(questionsRes.data?.answered_question_ids)
-        ? questionsRes.data.answered_question_ids
-        : [];
-      const selectedAnswers = questionsRes.data?.selected_answers || {};
-
-      console.log('questions API response:', questionsRes.data);
-
-      setSavedAnswerIds(answeredIds);
-      setAnswers(selectedAnswers);
-      setQuestions(apiQuestions);
     } catch (err) {
-      console.error('Error fetching questions:', err);
       setQuestions([]);
-      const errorMessage =
-        err.response?.data?.error ||
-        err.response?.data?.detail ||
-        err.message ||
-        'Ошибка загрузки вопросов';
+      const errorMessage = getErrorMessage(err, 'Ошибка загрузки вопросов');
       setError(t(errorMessage));
     } finally {
       setLoading(false);
     }
-  }, [t, user]);
+  }, [t]);
 
   const startSelectedTest = async () => {
+    const selectedCategories = availableTriggers
+      .filter((trigger) => selectedTriggerIds.includes(String(trigger.id)))
+      .map((trigger) => ({
+        id: trigger.id,
+        slug: trigger.slug,
+        name: trigger.name,
+        parent_id: trigger.parent_id,
+        question_count: getTriggerQuestionCount(trigger),
+      }));
+
+    console.log('[testing] selected categories', selectedCategories);
+
     if (selectedTriggerIds.length === 0) {
       setError(t('Выберите хотя бы одну категорию тестирования'));
+      return;
+    }
+
+    const questionError = getSelectedCategoriesQuestionError(selectedCategories);
+    if (questionError) {
+      setError(t(questionError));
       return;
     }
 
@@ -204,60 +284,38 @@ const StudentDashboard = () => {
       return;
     }
 
-    setLoading(true);
+    const triggerIds = selectedTriggerIds.map(Number);
+
+    setSubmitting(true);
     setError(null);
 
     try {
-      const startRes = await axios.post(
+      localStorage.setItem(
+        ACTIVE_TEST_CONFIG_STORAGE_KEY,
+        JSON.stringify({ testId: selectedTestForTriggers.id, triggerIds })
+      );
+
+      const response = await axios.post(
         `${API_URL}/student/tests/${selectedTestForTriggers.id}/start/`,
-        { trigger_ids: selectedTriggerIds.map(Number) },
+        { trigger_ids: triggerIds, language },
         { headers: getAuthHeaders() }
       );
 
-      const newAttemptId = startRes.data?.attempt?.id;
+      const newAttemptId = response.data?.attempt?.id;
       if (!newAttemptId) {
-        throw new Error(t('Не удалось создать попытку теста'));
+        throw new Error('Attempt was not created');
       }
 
-      const expiresAt = startRes.data?.expires_at;
-      const startedAt = startRes.data?.attempt?.started_at;
-      const nextDeadlineMs = expiresAt
-        ? Date.parse(expiresAt)
-        : Date.parse(startedAt) + TEST_DURATION_SECONDS * 1000;
-
-      submittedRef.current = false;
-      setAttemptId(newAttemptId);
-      setDeadlineMs(nextDeadlineMs);
-      setTimeLeftSeconds(Math.max(0, Math.ceil((nextDeadlineMs - Date.now()) / 1000)));
-
-      const questionsRes = await axios.get(
-        `${API_URL}/student/attempts/${newAttemptId}/questions/?lang=${language}`,
-        { headers: getAuthHeaders() }
-      );
-
-      const apiQuestions = Array.isArray(questionsRes.data?.questions)
-        ? questionsRes.data.questions
-        : [];
-      const answeredIds = Array.isArray(questionsRes.data?.answered_question_ids)
-        ? questionsRes.data.answered_question_ids
-        : [];
-      const selectedAnswers = questionsRes.data?.selected_answers || {};
-
-      setSavedAnswerIds(answeredIds);
-      setAnswers(selectedAnswers);
-      setQuestions(apiQuestions);
+      localStorage.setItem('activeTestAttemptId', String(newAttemptId));
+      navigate(`/test/${newAttemptId}`, { replace: true });
     } catch (err) {
-      console.error('Error starting test:', err);
-      setQuestions([]);
-      const errorMessage =
-        err.response?.data?.error ||
-        err.response?.data?.detail ||
-        err.message ||
-        'Ошибка запуска теста';
+      localStorage.removeItem(ACTIVE_TEST_CONFIG_STORAGE_KEY);
+      const errorMessage = getErrorMessage(err, 'Не удалось начать тест');
       setError(t(errorMessage));
     } finally {
-      setLoading(false);
+      setSubmitting(false);
     }
+
   };
 
   useEffect(() => {
@@ -340,10 +398,9 @@ const StudentDashboard = () => {
         { headers: getAuthHeaders() }
       );
 
-      logout();
+      logout(attemptId);
       navigate('/login', { replace: true });
     } catch (err) {
-      console.error('Error completing test:', err);
       const errorMessage =
         err.response?.data?.detail ||
         err.response?.data?.error ||
@@ -360,10 +417,10 @@ const StudentDashboard = () => {
     if (!deadlineMs || loading || submitting) return undefined;
 
     const updateTimer = () => {
-      const nextTimeLeft = Math.max(0, Math.ceil((deadlineMs - Date.now()) / 1000));
-      setTimeLeftSeconds(nextTimeLeft);
+      const nextRemaining = Math.max(0, Math.ceil((deadlineMs - Date.now()) / 1000));
+      setRemainingSeconds(nextRemaining);
 
-      if (nextTimeLeft <= 0 && !submittedRef.current) {
+      if (nextRemaining <= 0 && !submittedRef.current) {
         setError(t('Время вышло. Тест автоматически завершается с текущими ответами.'));
         completeTest({ timedOut: true });
       }
@@ -373,6 +430,10 @@ const StudentDashboard = () => {
     const intervalId = window.setInterval(updateTimer, 1000);
     return () => window.clearInterval(intervalId);
   }, [completeTest, deadlineMs, loading, submitting, t]);
+
+  useEffect(() => {
+    console.log("TIMER:", remainingSeconds, formatTime(remainingSeconds));
+  }, [remainingSeconds]);
 
   if (loading) {
     return (
@@ -404,31 +465,77 @@ const StudentDashboard = () => {
                   {t('Выберите категории тестирования')}
                 </h2>
                 <div className="space-y-3 rounded-xl border border-gray-200 bg-gray-50 p-4">
-                  {availableTriggers.map((trigger) => {
+                  {availableTriggerCards.map((trigger) => {
                     const triggerId = String(trigger.id);
                     const isSelected = selectedTriggerIds.includes(triggerId);
+                    const childTriggers = availableChildrenByParent[triggerId] || [];
+                    const isExpanded = expandedTriggerIds.includes(triggerId);
 
                     return (
-                      <label
+                      <div
                         key={trigger.id}
-                        className={`flex cursor-pointer items-center gap-3 rounded-xl border bg-white px-4 py-3 transition hover:border-green-300 hover:shadow-sm ${
+                        className={`rounded-xl border bg-white px-4 py-3 transition hover:border-green-300 hover:shadow-sm ${
                           isSelected ? 'border-green-500 ring-2 ring-green-100' : 'border-gray-200'
                         }`}
                       >
-                        <input
-                          type="checkbox"
-                          className="h-5 w-5 rounded border-gray-300 text-green-600 focus:ring-green-500"
-                          checked={isSelected}
-                          onChange={() => {
-                            setSelectedTriggerIds((current) =>
-                              current.includes(triggerId)
-                                ? current.filter((id) => id !== triggerId)
-                                : [...current, triggerId]
-                            );
-                          }}
-                        />
-                        <span className="font-medium text-gray-900">{t(trigger.name)}</span>
-                      </label>
+                        <div className="flex items-center gap-3">
+                          <input
+                            type="checkbox"
+                            className="h-5 w-5 rounded border-gray-300 text-green-600 focus:ring-green-500"
+                            checked={isSelected}
+                            onChange={() => {
+                              setSelectedTriggerIds((current) =>
+                                current.includes(triggerId)
+                                  ? current.filter((id) => id !== triggerId)
+                                  : [...current, triggerId]
+                              );
+                            }}
+                          />
+                          {childTriggers.length > 0 ? (
+                            <button
+                              type="button"
+                              className="flex flex-1 items-center justify-between text-left font-medium text-gray-900"
+                              onClick={() => {
+                                setExpandedTriggerIds((current) =>
+                                  current.includes(triggerId)
+                                    ? current.filter((id) => id !== triggerId)
+                                    : [...current, triggerId]
+                                );
+                              }}
+                            >
+                              <span>{t(trigger.name)}</span>
+                              <span className="text-lg text-gray-400">{isExpanded ? '-' : '+'}</span>
+                            </button>
+                          ) : (
+                            <span className="font-medium text-gray-900">{t(trigger.name)}</span>
+                          )}
+                        </div>
+                        {childTriggers.length > 0 && isExpanded && (
+                          <div className="mt-3 space-y-2 border-l-2 border-green-100 pl-5">
+                            {childTriggers.map((child) => {
+                              const childId = String(child.id);
+                              const childSelected = selectedTriggerIds.includes(childId);
+                              return (
+                                <label key={child.id} className="flex cursor-pointer items-center gap-3 rounded-lg bg-gray-50 px-3 py-2 hover:bg-green-50">
+                                  <input
+                                    type="checkbox"
+                                    className="h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
+                                    checked={childSelected}
+                                    onChange={() => {
+                                      setSelectedTriggerIds((current) =>
+                                        current.includes(childId)
+                                          ? current.filter((id) => id !== childId)
+                                          : [...current, childId]
+                                      );
+                                    }}
+                                  />
+                                  <span className="text-sm font-medium text-gray-800">{t(child.name)}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
                     );
                   })}
                 </div>
@@ -454,9 +561,9 @@ const StudentDashboard = () => {
   const progress = safeQuestions.length
     ? Math.round((answeredCount / safeQuestions.length) * 100)
     : 0;
-  const timeLeftPercent = Math.max(
+  const progressPercent = Math.max(
     0,
-    Math.min(100, (timeLeftSeconds / TEST_DURATION_SECONDS) * 100)
+    Math.min(100, (remainingSeconds / TOTAL_TIME) * 100)
   );
 
   return (
@@ -469,19 +576,20 @@ const StudentDashboard = () => {
           </div>
         </div>
 
-        <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4">
-          <div className="flex items-center justify-between">
-            <span className="text-sm font-semibold text-red-700 animate-pulse">
+        <div className="mt-4 rounded-xl border border-red-200 bg-red-50 p-4" data-no-translate>
+          <div className="flex items-center justify-between" data-no-translate>
+            <span className="text-sm font-semibold text-red-700">
               {t('Обратный отсчет')}
             </span>
-            <span className="font-mono text-2xl font-bold text-red-700 animate-pulse">
-              {formatTimeLeft(timeLeftSeconds)}
+            <span className="font-mono text-2xl font-bold text-red-700" data-no-translate>
+              {formatTime(remainingSeconds)}
             </span>
           </div>
-          <div className="mt-3 h-3 w-full overflow-hidden rounded-full bg-red-100">
+          <div className="mt-3 h-3 w-full overflow-hidden rounded-full bg-red-100" data-no-translate>
             <div
               className="h-full rounded-full bg-red-600 transition-all duration-1000 ease-linear"
-              style={{ width: `${timeLeftPercent}%` }}
+              style={{ width: `${progressPercent}%` }}
+              data-no-translate
             />
           </div>
         </div>
@@ -538,15 +646,18 @@ const StudentDashboard = () => {
                               <button
                                 key={answer.key}
                                 type="button"
-                                className={`w-full text-left p-3 rounded-xl cursor-pointer transition-colors border-2 ${
+                                className={`flex w-full cursor-pointer items-start gap-2 rounded-xl border-2 p-3 text-left whitespace-normal break-words transition-colors ${
                                   isSelected
                                     ? 'bg-green-500 text-white border-green-500'
                                     : 'bg-gray-50 hover:bg-gray-100 border-transparent'
                                 }`}
                                 onClick={() => selectAnswer(question.id, answerKey)}
                               >
-                                <span className={isSelected ? 'text-white' : 'text-gray-700'}>
-                                  {answer.key}) {answer.text}
+                                <span className={`flex-none ${isSelected ? 'text-white' : 'text-gray-700'}`}>
+                                  {answer.key})
+                                </span>
+                                <span className={`min-w-0 flex-1 whitespace-normal break-words [overflow-wrap:anywhere] ${isSelected ? 'text-white' : 'text-gray-700'}`}>
+                                  {answer.text}
                                 </span>
                               </button>
                             );
@@ -581,3 +692,4 @@ const StudentDashboard = () => {
 };
 
 export default StudentDashboard;
+

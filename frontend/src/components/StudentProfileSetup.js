@@ -1,22 +1,36 @@
-import React, { useState } from 'react';
-import { Navigate, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+
+const ACTIVE_TEST_CONFIG_STORAGE_KEY = 'activeTestConfig';
 
 const StudentProfileSetup = () => {
   const { user, updateStudentProfile } = useAuth();
   const navigate = useNavigate();
-  const [formData, setFormData] = useState({
-    military_rank: user?.military_rank || '',
-    last_name: user?.last_name || '',
-    first_name: user?.first_name || '',
-    patronymic: user?.patronymic || '',
-  });
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
-  if (user?.student_profile_completed) {
-    return <Navigate to="/student/dashboard" replace />;
-  }
+  const [formData, setFormData] = useState({
+    military_rank: '',
+    management_body: '',
+    last_name: '',
+    first_name: '',
+    middle_name: '',
+  });
+
+  useEffect(() => {
+    if (!user) return undefined;
+
+    setFormData({
+      military_rank: user.military_rank || '',
+      management_body: user.management_body || '',
+      last_name: user.last_name || '',
+      first_name: user.first_name || '',
+      middle_name: user.middle_name || user.patronymic || '',
+    });
+
+    return undefined;
+  }, [user]);
 
   const handleChange = (e) => {
     setFormData((prev) => ({
@@ -33,10 +47,13 @@ const StudentProfileSetup = () => {
     const result = await updateStudentProfile(formData);
 
     if (result.success) {
+      localStorage.removeItem(ACTIVE_TEST_CONFIG_STORAGE_KEY);
+      localStorage.removeItem('activeTestAttemptId');
       navigate('/student/dashboard', { replace: true });
       return;
     }
 
+    console.error('Profile update error details:', result.error);
     setError(result.error);
     setLoading(false);
   };
@@ -46,7 +63,7 @@ const StudentProfileSetup = () => {
       <div className="w-full max-w-xl animate-fade-in">
         <div className="glass-card rounded-2xl p-8">
           <div className="mb-8">
-            <h2 className="text-3xl font-bold text-gray-900">Данные ученика</h2>
+            <h2 className="text-3xl font-bold text-gray-900">Аскер кызматчынын маалыматы</h2>
             <p className="text-gray-500 mt-2">Заполните поля перед началом теста</p>
           </div>
 
@@ -70,42 +87,52 @@ const StudentProfileSetup = () => {
               />
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Фамилия</label>
-                <input
-                  type="text"
-                  className="input-modern"
-                  name="last_name"
-                  value={formData.last_name}
-                  onChange={handleChange}
-                  required
-                />
-              </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Орган управления</label>
+              <input
+                type="text"
+                className="input-modern"
+                name="management_body"
+                value={formData.management_body}
+                onChange={handleChange}
+                required
+              />
+            </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Имя</label>
-                <input
-                  type="text"
-                  className="input-modern"
-                  name="first_name"
-                  value={formData.first_name}
-                  onChange={handleChange}
-                  required
-                />
-              </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Фамилия</label>
+              <input
+                type="text"
+                className="input-modern"
+                name="last_name"
+                value={formData.last_name}
+                onChange={handleChange}
+                required
+              />
+            </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">Отчество</label>
-                <input
-                  type="text"
-                  className="input-modern"
-                  name="patronymic"
-                  value={formData.patronymic}
-                  onChange={handleChange}
-                  required
-                />
-              </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Имя</label>
+              <input
+                type="text"
+                className="input-modern"
+                name="first_name"
+                value={formData.first_name}
+                onChange={handleChange}
+                required
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Отчество</label>
+              <input
+                type="text"
+                className="input-modern"
+                name="middle_name"
+                value={formData.middle_name}
+                onChange={handleChange}
+                required
+              />
             </div>
 
             <button

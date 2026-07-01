@@ -3,7 +3,8 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import axios from 'axios';
 import { useLanguage } from '../context/LanguageContext';
-const API_URL = 'http://localhost:8000/api';
+import API_URL from '../config/api';
+
 const Register = () => {
   const { t } = useLanguage();
   const [formData, setFormData] = useState({
@@ -45,7 +46,7 @@ const Register = () => {
     setError('');
     setSuccess('');
     if (formData.role === 'student' && studentCount >= maxStudents) {
-      setError(`Достигнут лимит в ${maxStudents} учеников. Регистрация невозможна.`);
+      setError(`${t('Достигнут лимит в')} ${maxStudents} ${t('учеников. Регистрация невозможна.')}`);
       return;
     }
     setLoading(true);
@@ -78,10 +79,10 @@ const Register = () => {
   return <div className="register-container">
       <div className="card shadow">
         <div className="card-body p-4">
-          <h2 className="text-center mb-4">Регистрация</h2>
+          <h2 className="text-center mb-4">{t('Регистрация')}</h2>
           
           {isStudentLimitReached && formData.role === 'student' && <div className="alert alert-warning" role="alert">
-              Достигнут лимит в {maxStudents} учеников. Новые ученики не могут зарегистрироваться.
+              {t('Достигнут лимит в')} {maxStudents} {t('учеников. Регистрация невозможна.')}
             </div>}
           
           {error && <div className="alert alert-danger" role="alert">
@@ -94,48 +95,48 @@ const Register = () => {
           
           <form onSubmit={handleSubmit}>
             <div className="mb-3">
-              <label className="form-label">Роль</label>
+              <label className="form-label">{t('Роль')}</label>
               <select className="form-select" name="role" value={formData.role} onChange={handleChange} required>
-                <option value="student">Ученик</option>
-                <option value="teacher">Учитель</option>
+                <option value="student">{t('Ученик')}</option>
+                <option value="teacher">{t('Экзаменатор')}</option>
               </select>
               {formData.role === 'student' && <small className="text-muted">
-                  Учеников в системе: {studentCount} / {maxStudents}
+                  {t('Учеников в системе')}: {studentCount} / {maxStudents}
                 </small>}
             </div>
             
             <div className="row">
               <div className="col-md-6 mb-3">
-                <label className="form-label">Имя</label>
-                <input type="text" className="form-control" name="first_name" value={formData.first_name} onChange={handleChange} placeholder="Введите имя" />
+                <label className="form-label">{t('Имя')}</label>
+                <input type="text" className="form-control" name="first_name" value={formData.first_name} onChange={handleChange} placeholder={t('Введите имя')} />
               </div>
               
               <div className="col-md-6 mb-3">
-                <label className="form-label">Фамилия</label>
-                <input type="text" className="form-control" name="last_name" value={formData.last_name} onChange={handleChange} placeholder="Введите фамилию" />
+                <label className="form-label">{t('Фамилия')}</label>
+                <input type="text" className="form-control" name="last_name" value={formData.last_name} onChange={handleChange} placeholder={t('Введите фамилию')} />
               </div>
             </div>
             
             <div className="mb-3">
-              <label className="form-label">Имя пользователя *</label>
-              <input type="text" className="form-control" name="username" value={formData.username} onChange={handleChange} required placeholder="Придумайте имя пользователя" />
+              <label className="form-label">{t('Имя пользователя *')}</label>
+              <input type="text" className="form-control" name="username" value={formData.username} onChange={handleChange} required placeholder={t('Придумайте имя пользователя')} />
             </div>
             
             <div className="mb-3">
-              <label className="form-label">Email</label>
-              <input type="email" className="form-control" name="email" value={formData.email} onChange={handleChange} placeholder="Введите email" />
+              <label className="form-label">{t('Email')}</label>
+              <input type="email" className="form-control" name="email" value={formData.email} onChange={handleChange} placeholder={t('Введите email')} />
             </div>
             
             <div className="mb-3">
-              <label className="form-label">Пароль *</label>
-              <input type="password" className="form-control" name="password" value={formData.password} onChange={handleChange} required minLength="6" placeholder="Придумайте пароль (мин. 6 символов)" />
+              <label className="form-label">{t('Пароль *')}</label>
+              <input type="password" className="form-control" name="password" value={formData.password} onChange={handleChange} required minLength="6" placeholder={t('Придумайте пароль (мин. 6 символов)')} />
             </div>
             
             <button type="submit" className="btn btn-primary w-100" disabled={loading || (isStudentLimitReached && formData.role === 'student')}>
               {loading ? <>
                   <span className="spinner-border spinner-border-sm me-2"></span>
-                  Регистрация...
-                </> : 'Зарегистрироваться'}
+                  {t('Регистрация...')}
+                </> : t('Зарегистрироваться')}
             </button>
           </form>
           
