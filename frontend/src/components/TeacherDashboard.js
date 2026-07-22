@@ -57,6 +57,35 @@ const normalizeDateInput = (value) =>
 const formatTriggers = (triggers) =>
   (triggers || []).map((trigger) => trigger.name || trigger.slug || trigger).join(', ');
 
+const apiErrorFieldLabels = {
+  name: 'Название',
+  slug: 'Код',
+  description: 'Описание',
+  is_active: 'Активен',
+  non_field_errors: 'Ошибка'
+};
+
+const flattenApiError = (data, fallback) => {
+  if (!data) return fallback;
+  if (typeof data === 'string') return data;
+  if (Array.isArray(data)) return data.map((item) => flattenApiError(item, '')).filter(Boolean).join('; ') || fallback;
+  if (typeof data !== 'object') return fallback;
+
+  if (typeof data.detail === 'string') return data.detail;
+  if (typeof data.error === 'string') return data.error;
+
+  const messages = Object.entries(data)
+    .map(([field, value]) => {
+      const message = Array.isArray(value)
+        ? value.map((item) => flattenApiError(item, '')).filter(Boolean).join(', ')
+        : flattenApiError(value, '');
+      if (!message) return '';
+      return `${apiErrorFieldLabels[field] || field}: ${message}`;
+    })
+    .filter(Boolean);
+
+  return messages.join('; ') || fallback;
+};
 const emptyStudentForm = {
   username: '',
   first_name: '',
@@ -1030,7 +1059,7 @@ const TeacherDashboard = () => {
       fetchData();
     } catch (error) {
       console.error('Error creating trigger:', error);
-      setTriggerNotice(error.response?.data?.detail || error.response?.data?.error || 'triggers.notice_create_error');
+      setTriggerNotice(flattenApiError(error.response?.data, 'triggers.notice_create_error'));
     }
   };
 

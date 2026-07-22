@@ -1,6 +1,27 @@
 ﻿from core.serializer_utils import *
 
+from rest_framework.validators import UniqueValidator
+
+
 class QuestionTriggerSerializer(serializers.ModelSerializer):
+    name = serializers.CharField(
+        max_length=255,
+        validators=[
+            UniqueValidator(
+                queryset=QuestionTrigger.objects.all(),
+                message='Триггер с таким названием уже существует.'
+            )
+        ],
+    )
+    slug = serializers.SlugField(
+        max_length=64,
+        validators=[
+            UniqueValidator(
+                queryset=QuestionTrigger.objects.all(),
+                message='Триггер с таким кодом уже существует.'
+            )
+        ],
+    )
     question_count = serializers.SerializerMethodField()
     question_count_ru = serializers.SerializerMethodField()
     attempts_count = serializers.SerializerMethodField()

@@ -84,7 +84,7 @@ def ensure_public_triggers(model):
 
 def public_triggers_queryset(model):
     return (
-        model.objects.filter(is_active=True, slug__in=PUBLIC_TRIGGER_SLUGS)
+        model.objects.filter(is_active=True)
         .exclude(slug__in=HIDDEN_TRIGGER_SLUGS)
         .annotate(public_order=public_trigger_ordering())
         .order_by('public_order', 'name')
@@ -92,7 +92,11 @@ def public_triggers_queryset(model):
 
 
 def is_public_trigger(trigger):
-    return bool(trigger and trigger.slug in PUBLIC_TRIGGER_SLUGS and trigger.slug not in HIDDEN_TRIGGER_SLUGS)
+    return bool(
+        trigger
+        and getattr(trigger, 'is_active', False)
+        and trigger.slug not in HIDDEN_TRIGGER_SLUGS
+    )
 
 
 def get_officer_trigger(model):
@@ -127,6 +131,8 @@ def get_question_filter_for_public_triggers(triggers):
             query |= Q(trigger__slug__in=(SPECIAL_TRAINING_SLUG, *SPECIAL_TRAINING_SUBTRIGGER_SLUGS))
         elif trigger.slug in SPECIAL_TRAINING_SUBTRIGGER_SLUGS:
             query |= Q(trigger__slug=trigger.slug)
+        elif is_public_trigger(trigger):
+            query |= Q(trigger__slug=trigger.slug)
     return query
 
 
@@ -136,11 +142,7 @@ def get_public_triggers_for_test(test, model):
         return list(public_triggers_queryset(model))
 
     source_slugs = {trigger.slug for trigger in source_triggers}
-    public_slugs = {
-        trigger.slug
-        for trigger in source_triggers
-        if trigger.slug in PUBLIC_TRIGGER_SLUGS and trigger.slug not in HIDDEN_TRIGGER_SLUGS
-    }
+    public_slugs = {trigger.slug for trigger in source_triggers if is_public_trigger(trigger)}
     if source_slugs & {'junior_officer', 'senior_officer'}:
         public_slugs.add('officer')
 
