@@ -8,18 +8,9 @@ import useTestContentProtection from '../hooks/useTestContentProtection';
 
 const TOTAL_TIME = 3000; // 50 minutes
 const ACTIVE_TEST_CONFIG_STORAGE_KEY = 'activeTestConfig';
-const VISIBLE_TEST_CATEGORY_SLUGS = new Set([
-  'applicant',
-  'officer',
-  'reserve_officer',
-  'special-training',
-  'communications-training',
-  'engineering-training',
-  'logistics-training',
-  'armament-training',
-  'air-defense-training',
-]);
 const HIDDEN_TEST_CATEGORY_SLUGS = new Set(['sergeant_warrant', 'junior_officer', 'senior_officer']);
+const HIDDEN_TEST_CATEGORY_NAMES = new Set(['1', 'состав']);
+const NON_PUBLIC_TEST_CATEGORY_SLUGS = new Set(['odim11', 'sostav101']);
 const VARIABLE_QUESTION_COUNT_SLUGS = new Set([
   'special-training',
   'communications-training',
@@ -68,41 +59,42 @@ const extractArray = (data, key) => {
 
 const isVisibleTestingCategory = (trigger) => {
   const slug = String(trigger?.slug || '').trim();
-  return VISIBLE_TEST_CATEGORY_SLUGS.has(slug) && !HIDDEN_TEST_CATEGORY_SLUGS.has(slug);
+  const name = String(trigger?.name || '').trim().toLowerCase();
+  return (
+    Boolean(trigger?.id) &&
+    trigger?.is_active !== false &&
+    !HIDDEN_TEST_CATEGORY_SLUGS.has(slug) &&
+    !NON_PUBLIC_TEST_CATEGORY_SLUGS.has(slug) &&
+    !HIDDEN_TEST_CATEGORY_NAMES.has(name)
+  );
 };
 
 const getTriggerQuestionCount = (trigger) => {
   return Number(trigger?.question_count || 0);
 };
-const getRequiredQuestionCount = () => 100;
+const getRequiredQuestionCount = (categories = []) => {
+  return categories.length > 0 ? 1 : 100;
+};
 
 const getSelectedCategoriesQuestionError = (categories) => {
-  const requiredQuestionCount = getRequiredQuestionCount();
-  const specialTrainingCategories = categories.filter((category) =>
-    VARIABLE_QUESTION_COUNT_SLUGS.has(category.slug)
+  const selectedQuestionCount = categories.reduce(
+    (sum, category) => sum + Number(category.question_count || 0),
+    0
   );
-  const selectedParent = specialTrainingCategories.find(
-    (category) => category.slug === SPECIAL_TRAINING_SLUG
-  );
-  const selectedQuestionCount = selectedParent
-    ? categories
-        .filter((category) => (
-          category.slug === SPECIAL_TRAINING_SLUG ||
-          !VARIABLE_QUESTION_COUNT_SLUGS.has(category.slug)
-        ))
-        .reduce((sum, category) => sum + category.question_count, 0)
-    : categories.reduce((sum, category) => sum + category.question_count, 0);
 
-  if (selectedQuestionCount >= requiredQuestionCount) {
-    return null;
+  if (selectedQuestionCount <= 0) {
+    return 'Нет вопросов';
   }
 
-  if (specialTrainingCategories.length === 1 && !selectedParent) {
-    return 'В выбранной подкатегории меньше 100 вопросов';
+  const requiredQuestionCount = getRequiredQuestionCount(categories);
+
+  if (selectedQuestionCount < requiredQuestionCount) {
+    return 'Для данной категории недостаточно вопросов';
   }
 
-  return 'Для данной категории недостаточно вопросов';
+  return null;
 };
+
 
 const getErrorMessage = (err, fallback) => (
   err.response?.data?.message ||
@@ -128,7 +120,8 @@ const StudentDashboard = () => {
   const [tests, setTests] = useState([]);
   const [categoryTriggers, setCategoryTriggers] = useState([]);
   const [selectedTriggerIds, setSelectedTriggerIds] = useState([]);
-  const [expandedTriggerIds, setExpandedTriggerIds] = useState([]);
+  const [selectedMainTriggerId, setSelectedMainTriggerId] = useState('');
+  const [selectedSubTriggerId, setSelectedSubTriggerId] = useState('');
   const [questions, setQuestions] = useState([]);
   const [answers, setAnswers] = useState({});
   const [savedAnswerIds, setSavedAnswerIds] = useState([]);
@@ -179,6 +172,14 @@ const StudentDashboard = () => {
     () => availableTriggers.filter((trigger) => !trigger.parent_id),
     [availableTriggers]
   );
+  const selectedMainTrigger = useMemo(
+    () => availableTriggerCards.find((trigger) => String(trigger.id) === String(selectedMainTriggerId)) || null,
+    [availableTriggerCards, selectedMainTriggerId]
+  );
+  const selectedSubTriggers = useMemo(
+    () => selectedMainTriggerId ? (availableChildrenByParent[String(selectedMainTriggerId)] || []) : [],
+    [availableChildrenByParent, selectedMainTriggerId]
+  );
 
   const selectedTestForTriggers = useMemo(() => {
     if (!safeTests.length || selectedTriggerIds.length === 0) return null;
@@ -187,6 +188,10 @@ const StudentDashboard = () => {
       selectedTriggerIds.includes(String(trigger.id))
     );
     const selectedSlugs = selectedTriggers.map((trigger) => trigger.slug);
+    const selectedParentIds = selectedTriggers
+      .map((trigger) => trigger.parent_id)
+      .filter(Boolean)
+      .map(String);
     const isSpecialTrainingSelection = selectedSlugs.length > 0 &&
       selectedSlugs.every((slug) => VARIABLE_QUESTION_COUNT_SLUGS.has(slug));
 
@@ -196,6 +201,16 @@ const StudentDashboard = () => {
           (trigger) => trigger.slug === SPECIAL_TRAINING_SLUG
         )
       );
+      if (parentTest) return parentTest;
+    }
+
+    if (selectedParentIds.length > 0) {
+      const parentTest = safeTests.find((test) => {
+        const triggerIds = new Set(
+          (Array.isArray(test?.triggers) ? test.triggers : []).map((trigger) => String(trigger.id))
+        );
+        return selectedParentIds.every((triggerId) => triggerIds.has(triggerId));
+      });
       if (parentTest) return parentTest;
     }
 
@@ -464,80 +479,55 @@ const StudentDashboard = () => {
                 <h2 className="text-lg font-semibold text-gray-900 mb-4">
                   {t('Выберите категории тестирования')}
                 </h2>
-                <div className="space-y-3 rounded-xl border border-gray-200 bg-gray-50 p-4">
-                  {availableTriggerCards.map((trigger) => {
-                    const triggerId = String(trigger.id);
-                    const isSelected = selectedTriggerIds.includes(triggerId);
-                    const childTriggers = availableChildrenByParent[triggerId] || [];
-                    const isExpanded = expandedTriggerIds.includes(triggerId);
+                <div className="space-y-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
+                  <div>
+                    <label className="mb-2 block text-sm font-semibold text-gray-700">
+                      {t('triggers.trigger')}
+                    </label>
+                    <select
+                      className="input-modern bg-white"
+                      value={selectedMainTriggerId}
+                      onChange={(e) => {
+                        const triggerId = e.target.value;
+                        setSelectedMainTriggerId(triggerId);
+                        setSelectedSubTriggerId('');
+                        setSelectedTriggerIds(triggerId ? [triggerId] : []);
+                      }}
+                    >
+                      <option value="">{t('triggers.select_trigger')}</option>
+                      {availableTriggerCards.map((trigger) => (
+                        <option key={trigger.id} value={trigger.id}>{t(trigger.name)}</option>
+                      ))}
+                    </select>
+                  </div>
 
-                    return (
-                      <div
-                        key={trigger.id}
-                        className={`rounded-xl border bg-white px-4 py-3 transition hover:border-green-300 hover:shadow-sm ${
-                          isSelected ? 'border-green-500 ring-2 ring-green-100' : 'border-gray-200'
-                        }`}
-                      >
-                        <div className="flex items-center gap-3">
-                          <input
-                            type="checkbox"
-                            className="h-5 w-5 rounded border-gray-300 text-green-600 focus:ring-green-500"
-                            checked={isSelected}
-                            onChange={() => {
-                              setSelectedTriggerIds((current) =>
-                                current.includes(triggerId)
-                                  ? current.filter((id) => id !== triggerId)
-                                  : [...current, triggerId]
-                              );
-                            }}
-                          />
-                          {childTriggers.length > 0 ? (
-                            <button
-                              type="button"
-                              className="flex flex-1 items-center justify-between text-left font-medium text-gray-900"
-                              onClick={() => {
-                                setExpandedTriggerIds((current) =>
-                                  current.includes(triggerId)
-                                    ? current.filter((id) => id !== triggerId)
-                                    : [...current, triggerId]
-                                );
-                              }}
-                            >
-                              <span>{t(trigger.name)}</span>
-                              <span className="text-lg text-gray-400">{isExpanded ? '-' : '+'}</span>
-                            </button>
-                          ) : (
-                            <span className="font-medium text-gray-900">{t(trigger.name)}</span>
-                          )}
+                  {selectedMainTrigger && (
+                    <div>
+                      <label className="mb-2 block text-sm font-semibold text-gray-700">
+                        {t('triggers.subtrigger')}
+                      </label>
+                      {selectedSubTriggers.length > 0 ? (
+                        <select
+                          className="input-modern bg-white"
+                          value={selectedSubTriggerId}
+                          onChange={(e) => {
+                            const subTriggerId = e.target.value;
+                            setSelectedSubTriggerId(subTriggerId);
+                            setSelectedTriggerIds([subTriggerId || selectedMainTriggerId].filter(Boolean));
+                          }}
+                        >
+                          <option value="">{t('triggers.select_subtrigger')}</option>
+                          {selectedSubTriggers.map((trigger) => (
+                            <option key={trigger.id} value={trigger.id}>{t(trigger.name)}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <div className="rounded-xl border border-dashed border-gray-300 bg-white px-4 py-3 text-sm text-gray-600">
+                          {t('triggers.no_subtriggers')}
                         </div>
-                        {childTriggers.length > 0 && isExpanded && (
-                          <div className="mt-3 space-y-2 border-l-2 border-green-100 pl-5">
-                            {childTriggers.map((child) => {
-                              const childId = String(child.id);
-                              const childSelected = selectedTriggerIds.includes(childId);
-                              return (
-                                <label key={child.id} className="flex cursor-pointer items-center gap-3 rounded-lg bg-gray-50 px-3 py-2 hover:bg-green-50">
-                                  <input
-                                    type="checkbox"
-                                    className="h-4 w-4 rounded border-gray-300 text-green-600 focus:ring-green-500"
-                                    checked={childSelected}
-                                    onChange={() => {
-                                      setSelectedTriggerIds((current) =>
-                                        current.includes(childId)
-                                          ? current.filter((id) => id !== childId)
-                                          : [...current, childId]
-                                      );
-                                    }}
-                                  />
-                                  <span className="text-sm font-medium text-gray-800">{t(child.name)}</span>
-                                </label>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
+                      )}
+                    </div>
+                  )}
                 </div>
               </div>
 

@@ -1,5 +1,7 @@
 ﻿from core.serializer_utils import *
 
+from django.db.models import Count
+from django.utils.text import slugify
 from rest_framework.validators import UniqueValidator
 
 
@@ -15,12 +17,20 @@ class QuestionTriggerSerializer(serializers.ModelSerializer):
     )
     slug = serializers.SlugField(
         max_length=64,
+        required=False,
+        allow_blank=True,
         validators=[
             UniqueValidator(
                 queryset=QuestionTrigger.objects.all(),
                 message='Триггер с таким кодом уже существует.'
             )
         ],
+    )
+    parent = serializers.PrimaryKeyRelatedField(
+        queryset=QuestionTrigger.objects.filter(parent__isnull=True),
+        write_only=True,
+        required=False,
+        allow_null=True,
     )
     question_count = serializers.SerializerMethodField()
     question_count_ru = serializers.SerializerMethodField()
@@ -35,17 +45,53 @@ class QuestionTriggerSerializer(serializers.ModelSerializer):
         model = QuestionTrigger
         fields = [
             'id', 'name', 'slug', 'parent_id', 'parent_slug', 'parent_name', 'description', 'is_active',
+            'parent',
             'question_count', 'question_count_ru', 'attempts_count', 'average_score',
             'success_rate', 'created_at', 'updated_at'
         ]
         read_only_fields = ['created_at', 'updated_at']
+
+    def _generate_child_slug(self, parent, name):
+        parent_slug = getattr(parent, 'slug', '') or 'trigger'
+        name_slug = slugify(name, allow_unicode=False) or 'subtrigger'
+        max_suffix_length = 10
+        max_base_length = QuestionTrigger._meta.get_field('slug').max_length - max_suffix_length
+        base_slug = f'{parent_slug}-{name_slug}'[:max_base_length].strip('-') or f'{parent_slug}-subtrigger'
+        candidate = base_slug
+        counter = 2
+        queryset = QuestionTrigger.objects.all()
+        if self.instance:
+            queryset = queryset.exclude(pk=self.instance.pk)
+        while queryset.filter(slug=candidate).exists():
+            suffix = f'-{counter}'
+            candidate = f'{base_slug[:QuestionTrigger._meta.get_field("slug").max_length - len(suffix)]}{suffix}'
+            counter += 1
+        return candidate
+
+    def validate(self, attrs):
+        parent = attrs.get('parent', getattr(self.instance, 'parent', None) if self.instance else None)
+        slug = (attrs.get('slug') or '').strip()
+
+        if parent and self.instance and parent.id == self.instance.id:
+            raise serializers.ValidationError({'parent': 'Триггер не может быть родителем самого себя.'})
+        if parent and getattr(parent, 'parent_id', None):
+            raise serializers.ValidationError({'parent': 'Родительским может быть только основной триггер.'})
+        if parent and not slug:
+            attrs['slug'] = self._generate_child_slug(parent, attrs.get('name', getattr(self.instance, 'name', '')))
+        elif not parent and not slug:
+            raise serializers.ValidationError({'slug': 'Укажите код триггера.'})
+        elif slug:
+            attrs['slug'] = slug
+
+        return attrs
 
     def get_question_count(self, obj):
         if getattr(obj, 'slug', '') == 'officer':
             return Question.objects.filter(trigger__slug__in=['officer', 'junior_officer', 'senior_officer']).count()
         if getattr(obj, 'slug', '') == SPECIAL_TRAINING_SLUG:
             return Question.objects.filter(trigger__slug__in=(SPECIAL_TRAINING_SLUG, *SPECIAL_TRAINING_SUBTRIGGER_SLUGS)).count()
-        return getattr(obj, 'question_count', None) or obj.questions.count()
+        annotated_count = getattr(obj, 'question_count', None)
+        return annotated_count if annotated_count is not None else obj.questions.count()
 
     def get_question_count_ru(self, obj):
         if getattr(obj, 'slug', '') == 'officer':
@@ -60,7 +106,8 @@ class QuestionTriggerSerializer(serializers.ModelSerializer):
         return Attempt.objects.filter(test__triggers=obj, status='completed').distinct()
 
     def get_attempts_count(self, obj):
-        return getattr(obj, 'attempts_count', None) or self.get_attempt_queryset(obj).count()
+        annotated_count = getattr(obj, 'attempts_count', None)
+        return annotated_count if annotated_count is not None else self.get_attempt_queryset(obj).count()
 
     def get_average_score(self, obj):
         value = getattr(obj, 'average_score', None)
@@ -69,16 +116,36 @@ class QuestionTriggerSerializer(serializers.ModelSerializer):
         return round(value or 0, 2)
 
     def get_success_rate(self, obj):
-        attempts = self.get_attempt_queryset(obj)
-        total = attempts.count()
+        attempts = list(
+            self.get_attempt_queryset(obj).values('score', 'question_order', 'test_id')
+        )
+        total = len(attempts)
         if not total:
             return 0
+
+        missing_test_ids = {
+            attempt['test_id']
+            for attempt in attempts
+            if not attempt.get('question_order')
+        }
+        fallback_counts = {
+            row['id']: row['question_count']
+            for row in Test.objects.filter(id__in=missing_test_ids).annotate(
+                question_count=Count('questions', distinct=True)
+            ).values('id', 'question_count')
+        }
         successful = 0
         for attempt in attempts:
-            total_questions = attempt.total_questions()
-            if total_questions and (attempt.score / total_questions) >= 0.7:
+            total_questions = len(attempt.get('question_order') or []) or fallback_counts.get(attempt['test_id'], 0)
+            if total_questions and (attempt['score'] / total_questions) >= 0.7:
                 successful += 1
         return round((successful / total) * 100, 2)
+
+
+class QuestionTriggerSummarySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = QuestionTrigger
+        fields = ['id', 'name', 'slug', 'is_active', 'parent_id']
 
 
 class QuestionSerializer(serializers.ModelSerializer):
@@ -145,7 +212,9 @@ class QuestionSerializer(serializers.ModelSerializer):
 
     def get_trigger(self, obj):
         trigger = get_public_trigger_for_source(obj.trigger, QuestionTrigger)
-        return QuestionTriggerSerializer(trigger).data if trigger else None
+        # A question only needs basic category data. The full serializer calculates
+        # category statistics and caused several extra queries for every question.
+        return QuestionTriggerSummarySerializer(trigger).data if trigger else None
 
     def validate(self, attrs):
         for field in QUESTION_BASE_FIELDS:

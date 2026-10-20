@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import axios from 'axios';
-import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import API_URL from '../config/api';
 import useTestContentProtection from '../hooks/useTestContentProtection';
@@ -140,7 +139,6 @@ const TimerPanel = ({ remainingSeconds, answeredCount, totalCount, t }) => {
 const TestPage = () => {
   const { attemptId } = useParams();
   const navigate = useNavigate();
-  const { logout } = useAuth();
   const { language, t } = useLanguage();
   const selectedLanguage = language;
 
@@ -158,6 +156,8 @@ const TestPage = () => {
   const [remainingSeconds, setRemainingSeconds] = useState(TOTAL_TIME);
 
   const submittedRef = useRef(false);
+  const deadlineMsRef = useRef(null);
+  const pendingAnswerRequestRef = useRef(null);
 
   const localizedQuestions = useMemo(() => {
     return questions.map((question) => ({
@@ -181,8 +181,9 @@ const TestPage = () => {
           timed_out: timedOut,
         });
 
-        logout(attemptId);
-        navigate('/login', { replace: true });
+        localStorage.removeItem('activeTestAttemptId');
+        localStorage.removeItem('activeTestConfig');
+        navigate(`/test-results/${attemptId}`, { replace: true });
       } catch (err) {
         const errorMsg =
           err.response?.data?.error ||
@@ -195,7 +196,7 @@ const TestPage = () => {
         setCompleting(false);
       }
     },
-    [attemptId, logout, navigate, t]
+    [attemptId, navigate, t]
   );
 
   const fetchTestData = useCallback(async () => {
@@ -216,18 +217,20 @@ const TestPage = () => {
         : [];
 
       const savedSelectedAnswers = response.data?.selected_answers || {};
-      const expiresAt = response.data?.expires_at;
+      const serverRemainingSeconds = Number(response.data?.remaining_seconds);
 
       setQuestions(apiQuestions);
       setAnsweredQuestions(answeredIds);
       setSelectedAnswers(savedSelectedAnswers);
       setShowCorrectAnswers(Boolean(response.data?.show_correct_answers));
 
-      if (expiresAt) {
-        setRemainingSeconds(
-          Math.max(0, Math.ceil((Date.parse(expiresAt) - Date.now()) / 1000))
-        );
-      }
+      // The server calculates the remaining duration. Comparing an absolute
+      // server timestamp to Date.now() made the result depend on device clocks.
+      const nextRemaining = Number.isFinite(serverRemainingSeconds)
+        ? Math.max(0, Math.min(TOTAL_TIME, Math.ceil(serverRemainingSeconds)))
+        : TOTAL_TIME;
+      deadlineMsRef.current = window.performance.now() + nextRemaining * 1000;
+      setRemainingSeconds(nextRemaining);
     } catch (err) {
       const errorMsg =
         err.response?.data?.error ||
@@ -254,8 +257,11 @@ const TestPage = () => {
     if (loading || completing) return undefined;
 
     const interval = window.setInterval(() => {
-      setRemainingSeconds((prev) => {
-        if (prev <= 1) {
+      setRemainingSeconds(() => {
+        const prev = deadlineMsRef.current
+          ? Math.max(0, Math.ceil((deadlineMsRef.current - window.performance.now()) / 1000))
+          : 0;
+        if (prev <= 0) {
           window.clearInterval(interval);
 
           if (!submittedRef.current) {
@@ -266,7 +272,7 @@ const TestPage = () => {
           return 0;
         }
 
-        return prev - 1;
+        return prev;
       });
     }, 1000);
 
@@ -288,11 +294,14 @@ const TestPage = () => {
       setSavingQuestionId(question.id);
       setError('');
 
-      try {
-        await axios.post(`${API_URL}/student/attempts/${attemptId}/answer/`, {
+      const answerRequest = axios.post(`${API_URL}/student/attempts/${attemptId}/answer/`, {
           question_id: question.id,
           selected_option: selectedOption,
         });
+      pendingAnswerRequestRef.current = answerRequest;
+
+      try {
+        await answerRequest;
       } catch (err) {
         const errorMsg =
           err.response?.data?.error ||
@@ -310,22 +319,31 @@ const TestPage = () => {
           }, 1200);
         }
       } finally {
+        if (pendingAnswerRequestRef.current === answerRequest) {
+          pendingAnswerRequestRef.current = null;
+        }
         setSavingQuestionId(null);
       }
     },
     [attemptId, completing, navigate, savingQuestionId, t]
   );
 
-  const handleCompleteClick = useCallback(() => {
+  const handleCompleteClick = useCallback(async () => {
     setCompletionError('');
 
-    if (answeredCount < 1) {
-      setCompletionError(t('Ответьте хотя бы на один вопрос, чтобы завершить тест'));
-      return;
+    if (pendingAnswerRequestRef.current) {
+      setCompleting(true);
+      try {
+        await pendingAnswerRequestRef.current;
+      } catch {
+        setCompletionError(t('Дождитесь сохранения ответа и повторите завершение теста.'));
+        setCompleting(false);
+        return;
+      }
     }
 
-    completeTest();
-  }, [answeredCount, completeTest, t]);
+    await completeTest();
+  }, [completeTest, t]);
 
   if (loading) {
     return (
@@ -447,12 +465,12 @@ const TestPage = () => {
         <button
           type="button"
           className={`rounded-xl px-8 py-3 font-medium transition-colors ${
-            completing || answeredCount < 1
+            completing
               ? 'cursor-not-allowed bg-gray-300 text-gray-500'
               : 'bg-green-500 text-white hover:bg-green-600'
           }`}
           onClick={handleCompleteClick}
-          disabled={completing || answeredCount < 1}
+          disabled={completing}
         >
           {completing ? t('Завершение...') : t('Завершить тест')}
         </button>

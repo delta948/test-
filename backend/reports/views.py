@@ -18,7 +18,11 @@ class TeacherResultsView(APIView):
         attempts = Attempt.objects.filter(
             test__in=tests,
             status='completed'
-        ).select_related('student', 'test').prefetch_related('test__triggers').order_by('-completed_at')
+        ).select_related(
+            'student', 'test', 'test__teacher', 'selected_trigger'
+        ).annotate(
+            total_questions_db=Count('questions', distinct=True)
+        ).order_by('-completed_at')
 
         if not (
             request.user.is_staff or

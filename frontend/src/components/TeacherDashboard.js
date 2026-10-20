@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { useAuth } from '../context/AuthContext';
 import { localizeField, useLanguage } from '../context/LanguageContext';
@@ -25,11 +25,11 @@ const sanitizeFilename = (value) =>
     .replace(/\s+/g, '_')
     .slice(0, 80);
 
-const printPdfDocument = (html, filename) => {
+const printPdfDocument = (html, filename, popupMessage) => {
   const printWindow = window.open('', '_blank');
 
   if (!printWindow) {
-    alert('Разрешите вплывающие окна, чтобы охранить PDF.');
+    alert(popupMessage);
     return;
   }
 
@@ -54,8 +54,19 @@ const normalizeDateInput = (value) =>
     .replace(/^(\d{2}\.\d{2})(?=\d)/, '$1.')
     .slice(0, 10);
 
-const formatTriggers = (triggers) =>
-  (triggers || []).map((trigger) => trigger.name || trigger.slug || trigger).join(', ');
+const buildSlug = (value) =>
+  String(value || '')
+    .trim()
+    .toLowerCase()
+    .replace(/[а-яёөңү]/gi, (letter) => ({
+      а: 'a', б: 'b', в: 'v', г: 'g', д: 'd', е: 'e', ё: 'e', ж: 'zh', з: 'z', и: 'i', й: 'y',
+      к: 'k', л: 'l', м: 'm', н: 'n', о: 'o', п: 'p', р: 'r', с: 's', т: 't', у: 'u', ф: 'f',
+      х: 'h', ц: 'ts', ч: 'ch', ш: 'sh', щ: 'sch', ъ: '', ы: 'y', ь: '', э: 'e', ю: 'yu', я: 'ya',
+      ө: 'o', ң: 'n', ү: 'u'
+    }[letter] || ''))
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 64);
 
 const apiErrorFieldLabels = {
   name: 'Название',
@@ -86,6 +97,7 @@ const flattenApiError = (data, fallback) => {
 
   return messages.join('; ') || fallback;
 };
+
 const emptyStudentForm = {
   username: '',
   first_name: '',
@@ -300,6 +312,19 @@ const autoTranslateQuestion = async (question) => {
 const TeacherDashboard = () => {
   const { user } = useAuth();
   const { language, t } = useLanguage();
+  const dateTimeLocale = language === 'ky' ? 'ky-KG' : 'ru-RU';
+  const localizeDisplayText = (value) => {
+    if (!value) return '';
+    return t(String(value));
+  };
+  const formatLocalizedDateTime = (value) => (
+    value ? new Date(value).toLocaleString(dateTimeLocale) : '-'
+  );
+  const formatLocalizedTriggers = (items) =>
+    (items || [])
+      .map((trigger) => localizeDisplayText(trigger?.name || trigger?.slug || trigger))
+      .filter(Boolean)
+      .join(', ');
   const [questions, setQuestions] = useState([]);
   const [triggers, setTriggers] = useState([]);
   const [tests, setTests] = useState([]);
@@ -313,6 +338,8 @@ const TeacherDashboard = () => {
   const [error, setError] = useState(null);
   const [activeTab, setActiveTab] = useState('results');
   const [isMainTeacher, setIsMainTeacher] = useState(false);
+  const loadedResources = useRef(new Set());
+  const loadingResources = useRef(new Map());
   
   const [newQuestion, setNewQuestion] = useState(emptyQuestionForm());
   const [questionManagerSearch, setQuestionManagerSearch] = useState('');
@@ -339,7 +366,7 @@ const TeacherDashboard = () => {
     description: '',
     question_count: 100,
     is_active: true,
-    duration_minutes: 60,
+    duration_minutes: 50,
     attempts: 1
   });
   
@@ -355,8 +382,16 @@ const TeacherDashboard = () => {
   const [questionTriggerFilter, setQuestionTriggerFilter] = useState('');
   const [questionPage, setQuestionPage] = useState(1);
   const [newTrigger, setNewTrigger] = useState({ name: '', slug: '', description: '', is_active: true });
+  const [newSubTrigger, setNewSubTrigger] = useState({
+    parent: '',
+    name: '',
+    slug: '',
+    description: '',
+    is_active: true,
+    slugEdited: false
+  });
   const [editingTriggerId, setEditingTriggerId] = useState(null);
-  const [editingTrigger, setEditingTrigger] = useState({ name: '', slug: '', description: '', is_active: true });
+  const [editingTrigger, setEditingTrigger] = useState({ name: '', slug: '', description: '', is_active: true, parent: '' });
   const [triggerSearchName, setTriggerSearchName] = useState('');
   const [triggerSearchCode, setTriggerSearchCode] = useState('');
   const [triggerStatusFilter, setTriggerStatusFilter] = useState('all');
@@ -391,7 +426,7 @@ const TeacherDashboard = () => {
   const [editingStudent, setEditingStudent] = useState(emptyStudentForm);
 
   useEffect(() => {
-    fetchData();
+    fetchData(['results'], true);
   }, []);
 
   const canManageTeachers =
@@ -407,48 +442,67 @@ const TeacherDashboard = () => {
 
   const canManageTriggers = canDownloadAnyTeacherSummary;
 
-  const fetchData = async () => {
-    setLoading(true);
+  const resourcesForTab = (tab) => {
+    if (tab === 'tests') return ['tests', 'triggers'];
+    if (tab === 'questions' || tab === 'triggers') return ['questions', 'triggers'];
+    return tab === 'results' || tab === 'filter' ? ['results'] : [];
+  };
+
+  const fetchResource = (resource) => {
+    if (loadingResources.current.has(resource)) {
+      return loadingResources.current.get(resource);
+    }
+
+    const request = {
+      questions: () => axios.get(`${API_URL}/questions/`),
+      tests: () => axios.get(`${API_URL}/tests/`),
+      results: () => axios.get(`${API_URL}/teacher/results/`),
+      triggers: () => axios.get(`${API_URL}/triggers/`)
+    }[resource];
+
+    if (!request) return Promise.resolve();
+
+    const promise = request()
+      .then((response) => {
+        const setter = {
+          questions: setQuestions,
+          tests: setTests,
+          results: setResults,
+          triggers: setTriggers
+        }[resource];
+        setter(extractArray(response.data, resource));
+        loadedResources.current.add(resource);
+      })
+      .finally(() => loadingResources.current.delete(resource));
+
+    loadingResources.current.set(resource, promise);
+    return promise;
+  };
+
+  const fetchData = async (requestedResources = resourcesForTab(activeTab), showPageLoader = false) => {
+    if (showPageLoader) setLoading(true);
     setError(null);
 
     try {
-      const [questionsRes, testsRes, resultsRes, triggersRes] = await Promise.all([
-        axios.get(`${API_URL}/questions/`),
-        axios.get(`${API_URL}/tests/`),
-        axios.get(`${API_URL}/teacher/results/`),
-        axios.get(`${API_URL}/triggers/`)
-      ]);
-
-      console.log('user:', user);
-      console.log('questions API response:', questionsRes.data);
-      console.log('tests API response:', testsRes.data);
-      console.log('results API response:', resultsRes.data);
-
-      const loadedQuestions = extractArray(questionsRes.data, 'questions');
-      const loadedTests = extractArray(testsRes.data, 'tests');
-      const loadedResults = extractArray(resultsRes.data, 'results');
-      const loadedTriggers = extractArray(triggersRes.data, 'triggers');
-
-      console.log('tests:', loadedTests);
-      
-      setQuestions(loadedQuestions);
-      setTests(loadedTests);
-      setResults(loadedResults);
-      setTriggers(loadedTriggers);
+      await Promise.all(requestedResources.map(fetchResource));
       
       // Проверяем, является ли пользователь главным учителем
       const savedUser = JSON.parse(localStorage.getItem('user') || '{}');
       setIsMainTeacher(user?.is_main_teacher || savedUser.is_main_teacher || false);
     } catch (error) {
       console.error('Error fetching data:', error);
-      setQuestions([]);
-      setTriggers([]);
-      setTests([]);
-      setResults([]);
       setError(error.response?.data?.detail || error.response?.data?.error || error.message || 'Ошибка загрузки данных');
     } finally {
-      setLoading(false);
+      if (showPageLoader) setLoading(false);
     }
+  };
+
+  const openTab = (tab) => {
+    setActiveTab(tab);
+    const missingResources = resourcesForTab(tab).filter(
+      (resource) => !loadedResources.current.has(resource)
+    );
+    if (missingResources.length) fetchData(missingResources);
   };
 
   const handleCreateQuestion = async (e) => {
@@ -828,12 +882,12 @@ const TeacherDashboard = () => {
   const confirmQuestionImport = async () => {
     if (!pendingQuestionImportFile) return;
     if (!questionImportTargetTriggerId) {
-      alert('Выберите триггер/категорию, куда импортировать вопросы');
+      alert(t('questions.select_import_category'));
       return;
     }
     const selectedTrigger = (triggers || []).find((trigger) => String(trigger.id) === String(questionImportTargetTriggerId));
     if (!selectedTrigger) {
-      alert('Выбранная категория не найдена');
+      alert(t('questions.category_not_found'));
       return;
     }
     await handleTriggerQuestionImport(pendingQuestionImportFile, selectedTrigger);
@@ -845,20 +899,20 @@ const TeacherDashboard = () => {
     e.preventDefault();
 
     if (!newTest.title.trim()) {
-      alert('Введите название теста');
+      alert(t('tests.enter_title'));
       setCreateTestStep(1);
       return;
     }
 
     if (selectedTriggerIds.length === 0 && selectedQuestions.length !== 100) {
-      alert(`Необходимо выбрать ровно 100 вопросов. Выбрано: ${selectedQuestions.length}`);
+      alert(t('tests.must_select_exactly_100', { count: selectedQuestions.length }));
       setCreateTestStep(3);
       return;
     }
 
     const confirmText = selectedTriggerIds.length > 0
-      ? `Создать тест "${newTest.title}" с автоматическим набором 100 вопросов по выбранным триггерам?`
-      : `Создать тест "${newTest.title}" с ${selectedQuestions.length} выбранными вопросами?`;
+      ? t('tests.confirm_create_auto', { title: newTest.title })
+      : t('tests.confirm_create_manual', { title: newTest.title, count: selectedQuestions.length });
 
     if (!window.confirm(confirmText)) {
       return;
@@ -1048,23 +1102,75 @@ const TeacherDashboard = () => {
     }
 
     try {
-      await axios.post(`${API_URL}/triggers/`, {
+      const response = await axios.post(`${API_URL}/triggers/`, {
         ...newTrigger,
         name: newTrigger.name.trim(),
         slug: newTrigger.slug.trim(),
         description: newTrigger.description.trim()
       });
+      const createdTrigger = response.data;
+      if (createdTrigger?.id) {
+        setTriggers((current) => [
+          createdTrigger,
+          ...(current || []).filter((trigger) => trigger.id !== createdTrigger.id)
+        ]);
+      }
       setNewTrigger({ name: '', slug: '', description: '', is_active: true });
       setTriggerNotice('triggers.notice_saved');
-      fetchData();
+      await fetchData();
     } catch (error) {
       console.error('Error creating trigger:', error);
       setTriggerNotice(flattenApiError(error.response?.data, 'triggers.notice_create_error'));
     }
   };
 
+  const handleCreateSubTrigger = async (e) => {
+    e.preventDefault();
+    setTriggerNotice('');
+
+    if (!newSubTrigger.parent || !newSubTrigger.name.trim()) {
+      setTriggerNotice('triggers.subtrigger_required');
+      return;
+    }
+
+    try {
+      const response = await axios.post(`${API_URL}/triggers/`, {
+        parent: newSubTrigger.parent,
+        name: newSubTrigger.name.trim(),
+        slug: newSubTrigger.slug.trim(),
+        description: newSubTrigger.description.trim(),
+        is_active: newSubTrigger.is_active
+      });
+      const createdTrigger = response.data;
+      if (createdTrigger?.id) {
+        setTriggers((current) => [
+          createdTrigger,
+          ...(current || []).filter((trigger) => trigger.id !== createdTrigger.id)
+        ]);
+        setExpandedTriggerIds((current) =>
+          current.includes(String(createdTrigger.parent_id))
+            ? current
+            : [...current, String(createdTrigger.parent_id)]
+        );
+      }
+      setNewSubTrigger({
+        parent: newSubTrigger.parent,
+        name: '',
+        slug: '',
+        description: '',
+        is_active: true,
+        slugEdited: false
+      });
+      setTriggerNotice('triggers.subtrigger_saved');
+      await fetchData();
+    } catch (error) {
+      console.error('Error creating subtrigger:', error);
+      setTriggerNotice(flattenApiError(error.response?.data, 'triggers.subtrigger_create_error'));
+    }
+  };
+
   const handleDeleteTest = async (test) => {
-    if (!window.confirm(`Удалить тест "${test.title}"?`)) return;
+    if (!window.confirm(t('tests.confirm_delete', { title: test.title }))) return;
     try {
       await axios.delete(`${API_URL}/tests/${test.id}/`);
       if (testDrawer?.id === test.id) setTestDrawer(null);
@@ -1072,7 +1178,7 @@ const TeacherDashboard = () => {
       fetchData();
     } catch (error) {
       console.error('Error deleting test:', error);
-      alert(error.response?.data?.detail || error.response?.data?.error || 'Ошибка удаления теста');
+      alert(error.response?.data?.detail || error.response?.data?.error || t('tests.delete_error'));
     }
   };
 
@@ -1082,14 +1188,14 @@ const TeacherDashboard = () => {
       fetchData();
     } catch (error) {
       console.error('Error updating test status:', error);
-      alert('Ошибка изменения статуса теста');
+      alert(t('tests.status_change_error'));
     }
   };
 
   const duplicateTest = async (test) => {
     try {
       const triggerIds = (test.triggers || []).map((trigger) => trigger.id).filter(Boolean);
-      const payload = { title: `${test.title} (копия)` };
+      const payload = { title: t('tests.copy_title', { title: test.title }) };
       if (triggerIds.length) {
         payload.trigger_ids = triggerIds;
       } else {
@@ -1099,7 +1205,7 @@ const TeacherDashboard = () => {
       fetchData();
     } catch (error) {
       console.error('Error duplicating test:', error);
-      alert('Не удалось создать копию теста');
+      alert(t('tests.copy_error'));
     }
   };
 
@@ -1107,12 +1213,12 @@ const TeacherDashboard = () => {
     const testQuestions = test.questions || [];
     const lines = [
       test.title,
-      `Статус: ${test.is_active ? 'Активен' : 'Черновик'}`,
-      `Вопросов: ${test.question_count || testQuestions.length || 100}`,
-      `Триггеры: ${formatTriggers(test.triggers) || '-'}`,
+      `${t('common.status')}: ${test.is_active ? t('common.active') : t('tests.draft')}`,
+      `${t('questions.questions')}: ${test.question_count || testQuestions.length || 100}`,
+      `${t('triggers.triggers')}: ${formatLocalizedTriggers(test.triggers) || '-'}`,
       '',
       ...testQuestions.map((question) =>
-        `${question.id}. ${question.text}\nA. ${question.option_a}\nB. ${question.option_b}\nC. ${question.option_c}${question.option_d ? `\nD. ${question.option_d}` : ''}\nОтвет: ${question.correct_answer}`
+        `${question.id}. ${localizeField(question, 'text', language)}\nA. ${localizeField(question, 'option_a', language)}\nB. ${localizeField(question, 'option_b', language)}\nC. ${localizeField(question, 'option_c', language)}${localizeField(question, 'option_d', language) ? `\nD. ${localizeField(question, 'option_d', language)}` : ''}\n${t('answers.answer')}: ${question.correct_answer}`
       )
     ];
     const blob = new Blob([lines.join('\n\n')], { type: 'text/plain;charset=utf-8' });
@@ -1134,11 +1240,19 @@ const TeacherDashboard = () => {
       correct_count: 0,
       total_questions: test.question_count || 100
     });
-    printPdfDocument(html, sanitizeFilename(test.title));
+    printPdfDocument(html, sanitizeFilename(test.title), t('export.allow_popups'));
   };
 
   const clearTriggerForm = () => {
     setNewTrigger({ name: '', slug: '', description: '', is_active: true });
+    setNewSubTrigger({
+      parent: '',
+      name: '',
+      slug: '',
+      description: '',
+      is_active: true,
+      slugEdited: false
+    });
     setTriggerNotice('');
   };
 
@@ -1148,16 +1262,21 @@ const TeacherDashboard = () => {
       name: trigger.name || '',
       slug: trigger.slug || '',
       description: trigger.description || '',
-      is_active: Boolean(trigger.is_active)
+      is_active: Boolean(trigger.is_active),
+      parent: trigger.parent_id || ''
     });
   };
 
   const handleUpdateTrigger = async (e) => {
     e.preventDefault();
     try {
-      await axios.patch(`${API_URL}/triggers/${editingTriggerId}/`, editingTrigger);
+      const payload = {
+        ...editingTrigger,
+        parent: editingTrigger.parent || null
+      };
+      await axios.patch(`${API_URL}/triggers/${editingTriggerId}/`, payload);
       setEditingTriggerId(null);
-      setEditingTrigger({ name: '', slug: '', description: '', is_active: true });
+      setEditingTrigger({ name: '', slug: '', description: '', is_active: true, parent: '' });
       fetchData();
     } catch (error) {
       console.error('Error updating trigger:', error);
@@ -1333,9 +1452,9 @@ const TeacherDashboard = () => {
     const selectedTriggers = (triggers || []).filter((trigger) => selectedTriggerIds.includes(trigger.id));
     const selectedTriggerQuestionTotal = selectedTriggers.reduce((sum, trigger) => sum + (trigger.question_count || 0), 0);
     const hasAutoQuestions = selectedTriggerIds.length > 0;
-    const autoQuestionCount = hasAutoQuestions ? Math.min(100, selectedTriggerQuestionTotal) : selectedQuestions.length;
+    const autoQuestionCount = hasAutoQuestions ? selectedTriggerQuestionTotal : selectedQuestions.length;
     const isReady = Boolean(newTest.title.trim()) && (
-      hasAutoQuestions ? selectedTriggerQuestionTotal >= 100 : selectedQuestions.length === 100
+      hasAutoQuestions ? selectedTriggerQuestionTotal > 0 : selectedQuestions.length === 100
     );
     const readinessText = isReady
       ? t('tests.ready_to_create')
@@ -1600,17 +1719,36 @@ const TeacherDashboard = () => {
                 />
                 <select
                   className="input-modern"
-                  value={questionTriggerFilter}
+                  value={questionFilterMainTriggerId}
                   onChange={(e) => {
                     setQuestionTriggerFilter(e.target.value);
                     setQuestionPage(1);
                   }}
                 >
                   <option value="">{t('triggers.all')}</option>
-                  {(triggers || []).map((trigger) => (
-                    <option key={trigger.id} value={trigger.id}>{trigger.name}</option>
+                  {selectableTriggerCards.map((trigger) => (
+                    <option key={trigger.id} value={trigger.id}>{t(trigger.name)}</option>
                   ))}
                 </select>
+                {questionFilterMainTriggerId && (
+                  questionFilterSubTriggers.length > 0 ? (
+                    <select
+                      className="input-modern"
+                      value={questionFilterSubTriggerId}
+                      onChange={(e) => {
+                        setQuestionTriggerFilter(e.target.value || questionFilterMainTriggerId);
+                        setQuestionPage(1);
+                      }}
+                    >
+                      <option value="">{t('triggers.select_subtrigger')}</option>
+                      {questionFilterSubTriggers.map((trigger) => (
+                        <option key={trigger.id} value={trigger.id}>{t(trigger.name)}</option>
+                      ))}
+                    </select>
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-gray-300 px-4 py-3 text-sm text-gray-600">{t('triggers.no_subtriggers')}</div>
+                  )
+                )}
               </div>
 
               <div className="mb-4 flex flex-wrap gap-2">
@@ -1739,7 +1877,9 @@ const TeacherDashboard = () => {
                   </div>
                   <div className="rounded-xl bg-gray-50 p-4">
                     <p className="text-xs font-semibold uppercase text-gray-500">{t('questions.questions')}</p>
-                    <p className="mt-2 text-2xl font-bold text-gray-900">{autoQuestionCount} / 100</p>
+                    <p className="mt-2 text-2xl font-bold text-gray-900">
+                      {hasAutoQuestions ? autoQuestionCount : `${autoQuestionCount} / 100`}
+                    </p>
                   </div>
                   <div className="rounded-xl bg-gray-50 p-4">
                     <p className="text-xs font-semibold uppercase text-gray-500">{t('triggers.triggers')}</p>
@@ -1800,12 +1940,14 @@ const TeacherDashboard = () => {
                 <div className="rounded-xl bg-gray-50 p-4">
                   <div className="flex items-center justify-between text-sm">
                     <span className="font-medium text-gray-600">{t('questions.selected_count')}</span>
-                    <span className="font-bold text-gray-900">{autoQuestionCount} / 100</span>
+                    <span className="font-bold text-gray-900">
+                      {hasAutoQuestions ? autoQuestionCount : `${autoQuestionCount} / 100`}
+                    </span>
                   </div>
                   <div className="mt-3 h-2 overflow-hidden rounded-full bg-gray-200">
                     <div
-                      className={`h-full rounded-full ${autoQuestionCount >= 100 ? 'bg-green-600' : 'bg-yellow-500'}`}
-                      style={{ width: `${Math.min(100, autoQuestionCount)}%` }}
+                      className={`h-full rounded-full ${isReady ? 'bg-green-600' : 'bg-yellow-500'}`}
+                      style={{ width: `${hasAutoQuestions ? (autoQuestionCount > 0 ? 100 : 0) : Math.min(100, autoQuestionCount)}%` }}
                     />
                   </div>
                 </div>
@@ -1852,7 +1994,7 @@ const TeacherDashboard = () => {
       setSelectedResultDetail(response.data);
     } catch (error) {
       console.error('Error loading attempt detail:', error);
-      setError(error.response?.data?.detail || error.response?.data?.error || 'Ошибка загрузки деталей результата');
+      setError(error.response?.data?.detail || error.response?.data?.error || t('results.detail_load_error'));
     } finally {
       setLoadingResultDetail(false);
     }
@@ -1864,7 +2006,7 @@ const TeacherDashboard = () => {
 
   const getStudentName = (result) => {
     const fullName = result?.student_name?.trim();
-    return fullName || result?.student_username || 'Без имени';
+    return fullName || result?.student_username || t('common.no_name');
   };
 
   const buildStudentTestDocument = (detail) => {
@@ -1878,19 +2020,24 @@ const TeacherDashboard = () => {
       student_name: `${detail?.student?.first_name || ''} ${detail?.student?.last_name || ''}`,
       student_username: detail?.student?.username,
     });
-    const testTitle = detail?.attempt?.test?.title || '-';
+    const testTitle = localizeDisplayText(detail?.attempt?.test?.title) || '-';
     const completedAt = detail?.attempt?.completed_at
-      ? new Date(detail.attempt.completed_at).toLocaleString('ru-RU')
+      ? formatLocalizedDateTime(detail.attempt.completed_at)
       : '-';
     const rows = questionsForExport.map((question, index) => {
       const answer = answersByQuestionId.get(question.id);
       const selectedKey = answer?.selected_option || '';
       const selectedText = selectedKey
-        ? question[`option_${selectedKey.toLowerCase()}`] || ''
+        ? localizeField(question, `option_${selectedKey.toLowerCase()}`, language) || ''
         : '';
+      const questionText = localizeField(question, 'text', language);
+      const optionA = localizeField(question, 'option_a', language);
+      const optionB = localizeField(question, 'option_b', language);
+      const optionC = localizeField(question, 'option_c', language);
+      const optionD = localizeField(question, 'option_d', language);
       const statusText = answer
-        ? (answer.is_correct ? 'Правильно' : 'еправильно')
-        : 'ет ответа';
+        ? (answer.is_correct ? t('answers.correct') : t('answers.incorrect'))
+        : t('answers.no_answer');
       const bg = answer
         ? (answer.is_correct ? '#dcfce7' : '#fee2e2')
         : '#f9fafb';
@@ -1898,8 +2045,8 @@ const TeacherDashboard = () => {
       return `
         <tr style="background:${bg}">
           <td>${question.id}</td>
-          <td>${escapeHtml(question.text || '')}</td>
-          <td>A. ${escapeHtml(question.option_a || '')}<br />B. ${escapeHtml(question.option_b || '')}<br />C. ${escapeHtml(question.option_c || '')}</td>
+          <td>${escapeHtml(questionText || '')}</td>
+          <td>A. ${escapeHtml(optionA || '')}<br />B. ${escapeHtml(optionB || '')}<br />C. ${escapeHtml(optionC || '')}${optionD ? `<br />D. ${escapeHtml(optionD)}` : ''}</td>
           <td>${escapeHtml(selectedKey || '-')} ${selectedText ? `- ${escapeHtml(selectedText)}` : ''}</td>
           <td>${escapeHtml(question.correct_answer || '-')}</td>
           <td>${escapeHtml(statusText)}</td>
@@ -1956,7 +2103,7 @@ const TeacherDashboard = () => {
 
     const filename = `${sanitizeFilename(studentName)}-test-${selectedResultDetail.attempt?.id || 'result'}.pdf`;
 
-    printPdfDocument(buildStudentTestDocument(selectedResultDetail), filename);
+    printPdfDocument(buildStudentTestDocument(selectedResultDetail), filename, t('export.allow_popups'));
   };
 
   if (loading) {
@@ -2011,6 +2158,29 @@ const TeacherDashboard = () => {
   });
   const visibleTriggerCards = visibleTriggers.filter((trigger) => !trigger.parent_id);
   const selectableTriggerCards = (triggers || []).filter((trigger) => !trigger.parent_id);
+  const getMainTriggerId = (triggerId) => {
+    const selected = (triggers || []).find((trigger) => String(trigger.id) === String(triggerId));
+    return selected?.parent_id ? String(selected.parent_id) : String(triggerId || '');
+  };
+  const getSubTriggerId = (triggerId) => {
+    const selected = (triggers || []).find((trigger) => String(trigger.id) === String(triggerId));
+    return selected?.parent_id ? String(selected.id) : '';
+  };
+  const questionMainTriggerId = getMainTriggerId(newQuestion.trigger_id);
+  const questionSubTriggerId = getSubTriggerId(newQuestion.trigger_id);
+  const questionSubTriggers = questionMainTriggerId ? (triggerChildrenByParent[String(questionMainTriggerId)] || []) : [];
+  const questionFilterMainTriggerId = getMainTriggerId(questionTriggerFilter);
+  const questionFilterSubTriggerId = getSubTriggerId(questionTriggerFilter);
+  const questionFilterSubTriggers = questionFilterMainTriggerId ? (triggerChildrenByParent[String(questionFilterMainTriggerId)] || []) : [];
+  const questionManagerMainTriggerId = getMainTriggerId(questionManagerTriggerFilter);
+  const questionManagerSubTriggerId = getSubTriggerId(questionManagerTriggerFilter);
+  const questionManagerSubTriggers = questionManagerMainTriggerId ? (triggerChildrenByParent[String(questionManagerMainTriggerId)] || []) : [];
+  const testFilterMainTriggerId = getMainTriggerId(testTriggerFilter);
+  const testFilterSubTriggerId = getSubTriggerId(testTriggerFilter);
+  const testFilterSubTriggers = testFilterMainTriggerId ? (triggerChildrenByParent[String(testFilterMainTriggerId)] || []) : [];
+  const bulkMoveMainTriggerId = getMainTriggerId(bulkMoveTriggerId);
+  const bulkMoveSubTriggerId = getSubTriggerId(bulkMoveTriggerId);
+  const bulkMoveSubTriggers = bulkMoveMainTriggerId ? (triggerChildrenByParent[String(bulkMoveMainTriggerId)] || []) : [];
 
   const drawerQuestions = triggerDrawer
     ? getTriggerQuestions(triggerDrawer).filter((question) =>
@@ -2117,7 +2287,7 @@ const TeacherDashboard = () => {
       <div className="flex gap-2 mb-6 p-1 bg-gray-100 rounded-xl">
         <button 
           className={`px-6 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${activeTab === 'results' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
-          onClick={() => setActiveTab('results')}
+          onClick={() => openTab('results')}
         >
           <span className="flex items-center gap-2">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2128,7 +2298,7 @@ const TeacherDashboard = () => {
         </button>
         <button
           className={`px-6 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${activeTab === 'filter' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
-          onClick={() => setActiveTab('filter')}
+          onClick={() => openTab('filter')}
         >
           <span className="flex items-center gap-2">
             <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2139,7 +2309,7 @@ const TeacherDashboard = () => {
         </button>
         <button
           className={`px-6 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${activeTab === 'tests' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
-          onClick={() => setActiveTab('tests')}
+          onClick={() => openTab('tests')}
         >
           {t('tests.tests')}
         </button>
@@ -2147,13 +2317,13 @@ const TeacherDashboard = () => {
           <>
             <button
               className={`px-6 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${activeTab === 'questions' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
-              onClick={() => setActiveTab('questions')}
+              onClick={() => openTab('questions')}
             >
               {t('questions.section')}
             </button>
             <button
               className={`px-6 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${activeTab === 'triggers' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
-              onClick={() => setActiveTab('triggers')}
+              onClick={() => openTab('triggers')}
             >
               {t('triggers.triggers')}
             </button>
@@ -2162,7 +2332,7 @@ const TeacherDashboard = () => {
         <button
           className={`px-6 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${activeTab === 'students' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
           onClick={() => {
-            setActiveTab('students');
+            openTab('students');
             if (students.length === 0) {
               fetchStudents();
             }
@@ -2178,7 +2348,7 @@ const TeacherDashboard = () => {
         {canManageTeachers && (
           <button 
             className={`px-6 py-2.5 text-sm font-medium rounded-lg transition-all duration-200 ${activeTab === 'teachers' ? 'bg-white text-green-700 shadow-sm' : 'text-gray-600 hover:text-gray-900'}`}
-            onClick={() => setActiveTab('teachers')}
+            onClick={() => openTab('teachers')}
           >
             <span className="flex items-center gap-2">
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -2240,9 +2410,9 @@ const TeacherDashboard = () => {
                           <div>
                             <div className="font-semibold text-gray-900">{getStudentName(result)}</div>
                             <div className="text-sm text-gray-500">@{result.student_username}</div>
-                            <div className="text-sm text-gray-700 mt-2">{result.test_title}</div>
+                            <div className="text-sm text-gray-700 mt-2">{localizeDisplayText(result.test_title)}</div>
                             <div className="text-xs text-gray-500 mt-1">
-                              {result.completed_at ? new Date(result.completed_at).toLocaleString('ru-RU') : '-'}
+                              {formatLocalizedDateTime(result.completed_at)}
                             </div>
                           </div>
                           <span className={`shrink-0 inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${
@@ -2270,7 +2440,7 @@ const TeacherDashboard = () => {
                     onClick={closeResultDetail}
                     className="px-3 py-2 text-sm text-gray-600 hover:text-gray-900 hover:bg-gray-100 rounded-lg"
                   >
-                    Закрыть
+                    {t('common.close')}
                   </button>
                 )}
               </div>
@@ -2284,7 +2454,7 @@ const TeacherDashboard = () => {
                   <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-5">
                     <div className="rounded-xl bg-green-50 border border-green-200 p-4">
                       <div className="text-2xl font-bold text-green-700">{selectedResultDetail.correct_count}</div>
-                      <div className="text-sm text-gray-600">Правильных</div>
+                      <div className="text-sm text-gray-600">{t('results.correct_short')}</div>
                     </div>
                     <div className="rounded-xl bg-red-50 border border-red-200 p-4">
                       <div className="text-2xl font-bold text-red-700">{selectedResultDetail.incorrect_count}</div>
@@ -2292,14 +2462,14 @@ const TeacherDashboard = () => {
                     </div>
                     <div className="rounded-xl bg-blue-50 border border-blue-200 p-4">
                       <div className="text-2xl font-bold text-blue-700">{selectedResultDetail.total_questions}</div>
-                      <div className="text-sm text-gray-600">Всего вопросов</div>
+                      <div className="text-sm text-gray-600">{t('questions.total')}</div>
                     </div>
                     <button
                       type="button"
                       onClick={handleDownloadStudentTest}
                       className="rounded-xl bg-gray-900 p-4 text-left text-white hover:bg-gray-800 transition-colors"
                     >
-                      <div className="text-base font-semibold">Скачать PDF</div>
+                      <div className="text-base font-semibold">{t('export.download_pdf')}</div>
                       <div className="text-sm text-gray-300">{t('export.student_pdf_file')}</div>
                     </button>
                   </div>
@@ -2309,12 +2479,12 @@ const TeacherDashboard = () => {
                       const fullQuestion = (selectedResultDetail.questions || []).find(
                         (question) => question.id === answer.question?.id
                       );
-                      const selectedAnswer = (answer.question?.answers || []).find(
-                        (item) => item.key === answer.selected_option
-                      );
                       const correctKey = fullQuestion?.correct_answer;
+                      const selectedText = answer.selected_option && fullQuestion
+                        ? localizeField(fullQuestion, `option_${answer.selected_option.toLowerCase()}`, language)
+                        : '';
                       const correctText = correctKey
-                        ? fullQuestion?.[`option_${correctKey.toLowerCase()}`]
+                        ? localizeField(fullQuestion, `option_${correctKey.toLowerCase()}`, language)
                         : '';
 
                       return (
@@ -2329,19 +2499,19 @@ const TeacherDashboard = () => {
                           <div className="flex items-start justify-between gap-3">
                             <div>
                               <div className="text-sm font-semibold text-gray-900">
-                                #{fullQuestion?.id || answer.question?.id} {answer.question?.text}
+                                #{fullQuestion?.id || answer.question?.id} {localizeField(fullQuestion || answer.question, 'text', language)}
                               </div>
                               <div className={`mt-2 inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
                                 answer.is_correct
                                   ? 'bg-green-600 text-white'
                                   : 'bg-red-600 text-white'
                               }`}>
-                                Выбрал: {answer.selected_option}
-                                {selectedAnswer?.text ? ` - ${selectedAnswer.text}` : ''}
+                                {t('results.chosen')}: {answer.selected_option}
+                                {selectedText ? ` - ${selectedText}` : ''}
                               </div>
                               {!answer.is_correct && correctKey && (
                                 <div className="mt-2 inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-green-600 text-white">
-                                  Правильный ответ: {correctKey}
+                                  {t('answers.correct_answer')}: {correctKey}
                                   {correctText ? ` - ${correctText}` : ''}
                                 </div>
                               )}
@@ -2351,7 +2521,7 @@ const TeacherDashboard = () => {
                                 ? 'bg-green-100 text-green-800'
                                 : 'bg-red-100 text-red-800'
                             }`}>
-                              {answer.is_correct ? 'Правильно' : 'еправильно'}
+                              {answer.is_correct ? t('answers.correct') : t('answers.incorrect')}
                             </span>
                           </div>
                         </div>
@@ -2394,7 +2564,7 @@ const TeacherDashboard = () => {
                 <div className="mb-4 grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-4">
                   <input className="input-modern" value={newTest.title} onChange={(e) => setNewTest({...newTest, title: e.target.value})} placeholder={t('tests.title')} />
                   <input className="input-modern" value={testSettings.description} onChange={(e) => setTestSettings({...testSettings, description: e.target.value})} placeholder={t('common.description')} />
-                  <input className="input-modern" type="number" value={testSettings.duration_minutes} onChange={(e) => setTestSettings({...testSettings, duration_minutes: e.target.value})} placeholder={t('tests.duration_minutes')} />
+                  <input className="input-modern bg-gray-100" type="number" value={50} readOnly title="Единый лимит для всех тестов — 50 минут" placeholder={t('tests.duration_minutes')} />
                   <input className="input-modern" type="number" value={testSettings.attempts} onChange={(e) => setTestSettings({...testSettings, attempts: e.target.value})} placeholder={t('tests.attempts')} />
                 </div>
                 {renderCreateTestForm()}
@@ -2403,7 +2573,7 @@ const TeacherDashboard = () => {
           </div>
 
           <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-            <div className="mb-5 grid grid-cols-1 gap-3 lg:grid-cols-[1fr_160px_170px_180px_180px]">
+            <div className="mb-5 grid grid-cols-1 gap-3 lg:grid-cols-[1fr_160px_170px_180px_180px_180px]">
               <input className="input-modern" value={testSearch} onChange={(e) => { setTestSearch(e.target.value); setTestPage(1); }} placeholder={t('tests.search_by_title')} />
               <select className="input-modern" value={testStatusFilter} onChange={(e) => { setTestStatusFilter(e.target.value); setTestPage(1); }}>
                 <option value="all">{t('tests.all_statuses')}</option>
@@ -2411,10 +2581,20 @@ const TeacherDashboard = () => {
                 <option value="draft">{t('tests.drafts')}</option>
               </select>
               <input className="input-modern" type="date" value={testDateFilter} onChange={(e) => { setTestDateFilter(e.target.value); setTestPage(1); }} />
-              <select className="input-modern" value={testTriggerFilter} onChange={(e) => { setTestTriggerFilter(e.target.value); setTestPage(1); }}>
+              <select className="input-modern" value={testFilterMainTriggerId} onChange={(e) => { setTestTriggerFilter(e.target.value); setTestPage(1); }}>
                 <option value="">{t('triggers.all')}</option>
-                {(triggers || []).map((trigger) => <option key={trigger.id} value={trigger.id}>{trigger.name}</option>)}
+                {selectableTriggerCards.map((trigger) => <option key={trigger.id} value={trigger.id}>{t(trigger.name)}</option>)}
               </select>
+              {testFilterMainTriggerId && (
+                testFilterSubTriggers.length > 0 ? (
+                  <select className="input-modern" value={testFilterSubTriggerId} onChange={(e) => { setTestTriggerFilter(e.target.value || testFilterMainTriggerId); setTestPage(1); }}>
+                    <option value="">{t('triggers.select_subtrigger')}</option>
+                    {testFilterSubTriggers.map((trigger) => <option key={trigger.id} value={trigger.id}>{t(trigger.name)}</option>)}
+                  </select>
+                ) : (
+                  <div className="rounded-xl border border-dashed border-gray-300 px-4 py-3 text-sm text-gray-600">{t('triggers.no_subtriggers')}</div>
+                )
+              )}
               <select className="input-modern" value={testSort} onChange={(e) => setTestSort(e.target.value)}>
                 <option value="created_desc">{t('sort.new_first')}</option>
                 <option value="created_asc">{t('sort.old_first')}</option>
@@ -2535,10 +2715,10 @@ const TeacherDashboard = () => {
                 <div className="space-y-3">
                   {(testPreview.questions || []).slice(0, 100).map((question) => (
                     <div key={question.id} className="rounded-xl border border-gray-200 p-4">
-                      <p className="font-semibold text-gray-900">{question.id}. {question.text}</p>
+                      <p className="font-semibold text-gray-900">{question.id}. {localizeField(question, 'text', language)}</p>
                       <div className="mt-2 grid grid-cols-1 gap-2 md:grid-cols-2">
-                        {['A', 'B', 'C', 'D'].map((key) => question[`option_${key.toLowerCase()}`] && (
-                          <div key={key} className={`rounded-lg px-3 py-2 text-sm ${question.correct_answer === key ? 'bg-green-600 text-white' : 'bg-gray-50 text-gray-700'}`}>{key}. {question[`option_${key.toLowerCase()}`]}</div>
+                        {['A', 'B', 'C', 'D'].map((key) => localizeField(question, `option_${key.toLowerCase()}`, language) && (
+                          <div key={key} className={`rounded-lg px-3 py-2 text-sm ${question.correct_answer === key ? 'bg-green-600 text-white' : 'bg-gray-50 text-gray-700'}`}>{key}. {localizeField(question, `option_${key.toLowerCase()}`, language)}</div>
                         ))}
                       </div>
                     </div>
@@ -2553,68 +2733,88 @@ const TeacherDashboard = () => {
       {activeTab === 'questions' && canManageTriggers && (
         <div className="space-y-6">
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm"><p className="text-2xl font-bold text-gray-900">{questionStats.total}</p><p className="text-sm text-gray-500">Всего вопросов</p></div>
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm"><p className="text-2xl font-bold text-green-700">{questionStats.active}</p><p className="text-sm text-gray-500">Активных</p></div>
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm"><p className="text-2xl font-bold text-blue-700">{questionStats.triggers}</p><p className="text-sm text-gray-500">Триггеров</p></div>
-            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm"><p className="text-lg font-bold text-gray-900">{questionStats.latest ? questionStats.latest.toLocaleDateString('ru-RU') : '-'}</p><p className="text-sm text-gray-500">Последний вопрос</p></div>
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm"><p className="text-2xl font-bold text-gray-900">{questionStats.total}</p><p className="text-sm text-gray-500">{t('questions.total')}</p></div>
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm"><p className="text-2xl font-bold text-green-700">{questionStats.active}</p><p className="text-sm text-gray-500">{t('common.active_many')}</p></div>
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm"><p className="text-2xl font-bold text-blue-700">{questionStats.triggers}</p><p className="text-sm text-gray-500">{t('triggers.count_label')}</p></div>
+            <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm"><p className="text-lg font-bold text-gray-900">{questionStats.latest ? questionStats.latest.toLocaleDateString(language === 'ru' ? 'ru-RU' : 'ky-KG') : '-'}</p><p className="text-sm text-gray-500">{t('questions.latest')}</p></div>
           </div>
 
           <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
             <div className="mb-5 flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
               <div>
-                <h4 className="text-xl font-semibold text-gray-900">{editingQuestionId ? 'Редактировать вопрос' : 'Создать вопрос'}</h4>
-                <p className="text-sm text-gray-500">Черновик сохраняется автоматически в браузере.</p>
+                <h4 className="text-xl font-semibold text-gray-900">{editingQuestionId ? t('questions.edit') : t('questions.create')}</h4>
+                <p className="text-sm text-gray-500">{t('questions.draft_autosave_hint')}</p>
               </div>
               <div className="flex flex-wrap gap-2">
-                <button type="button" className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100" onClick={handleAutoTranslateNewQuestion}>Автоматически перевести</button>
-                <button type="button" className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => setQuestionPreview(!questionPreview)}>Предпросмотр</button>
-                <button type="button" className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={clearQuestionForm}>Очистить</button>
+                <button type="button" className="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-100" onClick={handleAutoTranslateNewQuestion}>{t('questions.auto_translate')}</button>
+                <button type="button" className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => setQuestionPreview(!questionPreview)}>{t('common.preview')}</button>
+                <button type="button" className="rounded-lg border border-gray-200 px-4 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={clearQuestionForm}>{t('common.clear')}</button>
               </div>
             </div>
             <form onSubmit={handleCreateQuestion} className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               <div className="lg:col-span-2">
-                <label className="mb-2 block text-sm font-semibold text-gray-700">Текст вопроса</label>
+                <label className="mb-2 block text-sm font-semibold text-gray-700">{t('questions.text')}</label>
                 <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
                   <div>
-                    <div className="mb-1 text-xs font-bold uppercase text-gray-500">Русская версия</div>
-                    <textarea className="input-modern min-h-[110px]" value={newQuestion.text_ru} onChange={(e) => setNewQuestion({...newQuestion, text: e.target.value, text_ru: e.target.value})} placeholder="Введите полный текст вопроса" />
+                    <div className="mb-1 text-xs font-bold uppercase text-gray-500">{t('language.ru_version')}</div>
+                    <textarea className="input-modern min-h-[110px]" value={newQuestion.text_ru} onChange={(e) => setNewQuestion({...newQuestion, text: e.target.value, text_ru: e.target.value})} placeholder={t('questions.full_text_placeholder')} />
                   </div>
                   <div>
-                    <div className="mb-1 text-xs font-bold uppercase text-gray-500">Кыргызская версия</div>
+                    <div className="mb-1 text-xs font-bold uppercase text-gray-500">{t('language.ky_version')}</div>
                     <textarea className="input-modern min-h-[110px]" value={newQuestion.text_ky} onChange={(e) => setNewQuestion({...newQuestion, text_ky: e.target.value})} placeholder={t('questions.text_ky_placeholder')} />
                   </div>
                 </div>
-                <p className="mt-1 text-xs text-gray-500">Формулируйте вопрос коротко и однозначно.</p>
+                <p className="mt-1 text-xs text-gray-500">{t('questions.short_clear_hint')}</p>
               </div>
               {['a', 'b', 'c', 'd'].map((key) => (
                 <div key={key}>
-                  <label className="mb-2 block text-sm font-semibold text-gray-700">Вариант {key.toUpperCase()}</label>
+                  <label className="mb-2 block text-sm font-semibold text-gray-700">{t('answers.option_label', { option: key.toUpperCase() })}</label>
                   <div className="grid grid-cols-1 gap-2">
-                    <input className="input-modern" value={newQuestion[`option_${key}_ru`] || ''} onChange={(e) => setNewQuestion({...newQuestion, [`option_${key}`]: e.target.value, [`option_${key}_ru`]: e.target.value})} placeholder={`Ответ ${key.toUpperCase()} на русском`} />
-                    <input className="input-modern" value={newQuestion[`option_${key}_ky`] || ''} onChange={(e) => setNewQuestion({...newQuestion, [`option_${key}_ky`]: e.target.value})} placeholder={`Жооп ${key.toUpperCase()} кыргызча`} />
+                    <input className="input-modern" value={newQuestion[`option_${key}_ru`] || ''} onChange={(e) => setNewQuestion({...newQuestion, [`option_${key}`]: e.target.value, [`option_${key}_ru`]: e.target.value})} placeholder={t('answers.answer_ru_placeholder', { option: key.toUpperCase() })} />
+                    <input className="input-modern" value={newQuestion[`option_${key}_ky`] || ''} onChange={(e) => setNewQuestion({...newQuestion, [`option_${key}_ky`]: e.target.value})} placeholder={t('answers.answer_ky_placeholder', { option: key.toUpperCase() })} />
                   </div>
-                  <p className="mt-1 text-xs text-gray-500">{key === 'd' ? 'Дополнительный вариант, можно оставить пустым.' : 'Обязательный вариант ответа.'}</p>
+                  <p className="mt-1 text-xs text-gray-500">{key === 'd' ? t('answers.optional_hint') : t('answers.required_hint')}</p>
                 </div>
               ))}
               <div>
-                <label className="mb-2 block text-sm font-semibold text-gray-700">Триггер</label>
-                <select className="input-modern" value={newQuestion.trigger_id} onChange={(e) => setNewQuestion({...newQuestion, trigger_id: e.target.value})}>
-                  <option value="">Выберите триггер</option>
-                  {(triggers || []).map(trigger => <option key={trigger.id} value={trigger.id}>{trigger.name}</option>)}
+                <label className="mb-2 block text-sm font-semibold text-gray-700">{t('triggers.trigger')}</label>
+                <select
+                  className="input-modern"
+                  value={questionMainTriggerId}
+                  onChange={(e) => setNewQuestion({...newQuestion, trigger_id: e.target.value})}
+                >
+                  <option value="">{t('triggers.select_trigger')}</option>
+                  {selectableTriggerCards.map(trigger => <option key={trigger.id} value={trigger.id}>{t(trigger.name)}</option>)}
                 </select>
               </div>
+              {questionMainTriggerId && (
+                <div>
+                  <label className="mb-2 block text-sm font-semibold text-gray-700">{t('triggers.subtrigger')}</label>
+                  {questionSubTriggers.length > 0 ? (
+                    <select
+                      className="input-modern"
+                      value={questionSubTriggerId}
+                      onChange={(e) => setNewQuestion({...newQuestion, trigger_id: e.target.value || questionMainTriggerId})}
+                    >
+                      <option value="">{t('triggers.select_subtrigger')}</option>
+                      {questionSubTriggers.map(trigger => <option key={trigger.id} value={trigger.id}>{t(trigger.name)}</option>)}
+                    </select>
+                  ) : (
+                    <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 px-4 py-3 text-sm text-gray-600">
+                      {t('triggers.no_subtriggers')}
+                    </div>
+                  )}
+                </div>
+              )}
               <div>
-                <label className="mb-2 block text-sm font-semibold text-gray-700">Правильный ответ</label>
+                <label className="mb-2 block text-sm font-semibold text-gray-700">{t('answers.correct_answer')}</label>
                 <select className="input-modern" value={newQuestion.correct_answer} onChange={(e) => setNewQuestion({...newQuestion, correct_answer: e.target.value})}>
-                  <option value="A">Вариант A</option>
-                  <option value="B">Вариант B</option>
-                  <option value="C">Вариант C</option>
-                  <option value="D">Вариант D</option>
+                  {['A', 'B', 'C', 'D'].map((option) => <option key={option} value={option}>{t('answers.option_label', { option })}</option>)}
                 </select>
               </div>
               {questionPreview && (
                 <div className="lg:col-span-2 rounded-xl border border-green-100 bg-green-50 p-4">
-                  <p className="font-semibold text-gray-900">{localizeField(newQuestion, 'text', language) || 'Текст вопроса'}</p>
+                  <p className="font-semibold text-gray-900">{localizeField(newQuestion, 'text', language) || t('questions.text')}</p>
                   <div className="mt-3 grid grid-cols-1 gap-2 md:grid-cols-2">
                     {['A', 'B', 'C', 'D'].map((key) => localizeField(newQuestion, `option_${key.toLowerCase()}`, language) && (
                       <div key={key} className={`rounded-lg px-3 py-2 text-sm ${newQuestion.correct_answer === key ? 'bg-green-600 text-white' : 'bg-white text-gray-700'}`}>{key}. {localizeField(newQuestion, `option_${key.toLowerCase()}`, language)}</div>
@@ -2624,7 +2824,7 @@ const TeacherDashboard = () => {
               )}
               <div className="lg:col-span-2 flex flex-wrap justify-end gap-2">
                 <label className="cursor-pointer rounded-lg border border-gray-200 px-5 py-3 text-sm font-bold text-gray-700 shadow-sm hover:bg-gray-50">
-                  Импорт вопросов
+                  {t('questions.import')}
                   <input
                     type="file"
                     accept=".csv,.docx,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -2632,7 +2832,7 @@ const TeacherDashboard = () => {
                     onChange={(event) => {
                       const selectedTrigger = (triggers || []).find((trigger) => String(trigger.id) === String(newQuestion.trigger_id));
                       if (!selectedTrigger) {
-                        alert('Выберите триггер/категорию перед импортом вопросов');
+                        alert(t('questions.select_category_before_import'));
                         event.target.value = '';
                         return;
                       }
@@ -2646,50 +2846,70 @@ const TeacherDashboard = () => {
                   onClick={() => {
                     const selectedTrigger = (triggers || []).find((trigger) => String(trigger.id) === String(newQuestion.trigger_id));
                     if (!selectedTrigger) {
-                      alert('Выберите триггер/категорию для экспорта вопросов');
+                      alert(t('questions.select_category_for_export'));
                       return;
                     }
                     exportTriggerQuestions(selectedTrigger);
                   }}
                 >
-                  Экспорт вопросов
+                  {t('questions.export')}
                 </button>
-                <button type="submit" className="rounded-lg bg-green-600 px-5 py-3 text-sm font-bold text-white shadow-sm hover:bg-green-700">{editingQuestionId ? 'Сохранить вопрос' : 'Создать вопрос'}</button>
+                <button type="submit" className="rounded-lg bg-green-600 px-5 py-3 text-sm font-bold text-white shadow-sm hover:bg-green-700">{editingQuestionId ? t('questions.save') : t('questions.create')}</button>
               </div>
             </form>
           </div>
 
           <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
-            <div className="mb-4 grid grid-cols-1 gap-3 lg:grid-cols-[1fr_200px_180px_180px]">
-              <input className="input-modern" value={questionManagerSearch} onChange={(e) => { setQuestionManagerSearch(e.target.value); setQuestionManagerPage(1); }} placeholder="Поиск по тексту вопроса" />
-              <select className="input-modern" value={questionManagerTriggerFilter} onChange={(e) => { setQuestionManagerTriggerFilter(e.target.value); setQuestionManagerPage(1); }}>
-                <option value="">Все триггеры</option>
-                {(triggers || []).map(trigger => <option key={trigger.id} value={trigger.id}>{trigger.name}</option>)}
+            <div className="mb-4 grid grid-cols-1 gap-3 lg:grid-cols-[1fr_200px_200px_180px_180px]">
+              <input className="input-modern" value={questionManagerSearch} onChange={(e) => { setQuestionManagerSearch(e.target.value); setQuestionManagerPage(1); }} placeholder={t('questions.search_by_text')} />
+              <select className="input-modern" value={questionManagerMainTriggerId} onChange={(e) => { setQuestionManagerTriggerFilter(e.target.value); setQuestionManagerPage(1); }}>
+                <option value="">{t('triggers.all')}</option>
+                {selectableTriggerCards.map(trigger => <option key={trigger.id} value={trigger.id}>{t(trigger.name)}</option>)}
               </select>
+              {questionManagerMainTriggerId && (
+                questionManagerSubTriggers.length > 0 ? (
+                  <select className="input-modern" value={questionManagerSubTriggerId} onChange={(e) => { setQuestionManagerTriggerFilter(e.target.value || questionManagerMainTriggerId); setQuestionManagerPage(1); }}>
+                    <option value="">{t('triggers.select_subtrigger')}</option>
+                    {questionManagerSubTriggers.map(trigger => <option key={trigger.id} value={trigger.id}>{t(trigger.name)}</option>)}
+                  </select>
+                ) : (
+                  <div className="rounded-xl border border-dashed border-gray-300 px-4 py-3 text-sm text-gray-600">{t('triggers.no_subtriggers')}</div>
+                )
+              )}
               <select className="input-modern" value={questionManagerAnswerFilter} onChange={(e) => { setQuestionManagerAnswerFilter(e.target.value); setQuestionManagerPage(1); }}>
-                <option value="">Все ответы</option>
-                {['A', 'B', 'C', 'D'].map(answer => <option key={answer} value={answer}>Ответ {answer}</option>)}
+                <option value="">{t('answers.all')}</option>
+                {['A', 'B', 'C', 'D'].map(answer => <option key={answer} value={answer}>{t('answers.answer_with_option', { option: answer })}</option>)}
               </select>
               <select className="input-modern" value={questionManagerSort} onChange={(e) => setQuestionManagerSort(e.target.value)}>
-                <option value="id_desc">ID по убыванию</option>
-                <option value="id_asc">ID по возрастанию</option>
-                <option value="created_desc">Сначала новые</option>
-                <option value="created_asc">Сначала старые</option>
+                <option value="id_desc">{t('sort.id_desc')}</option>
+                <option value="id_asc">{t('sort.id_asc')}</option>
+                <option value="created_desc">{t('sort.new_first')}</option>
+                <option value="created_asc">{t('sort.old_first')}</option>
               </select>
             </div>
 
             <div className="mb-4 flex flex-wrap items-center gap-2">
-              <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => setSelectedQuestionIds(pagedManagedQuestions.map((question) => question.id))}>Выбрать все</button>
-              <button type="button" className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-100" onClick={bulkDeleteQuestions}>Массовое удаление</button>
-              <select className="rounded-lg border border-gray-200 px-3 py-2 text-sm" value={bulkMoveTriggerId} onChange={(e) => setBulkMoveTriggerId(e.target.value)}>
-                <option value="">Сменить триггер</option>
-                {(triggers || []).map(trigger => <option key={trigger.id} value={trigger.id}>{trigger.name}</option>)}
+              <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => setSelectedQuestionIds(pagedManagedQuestions.map((question) => question.id))}>{t('common.choose_all')}</button>
+              <button type="button" className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-100" onClick={bulkDeleteQuestions}>{t('questions.bulk_delete')}</button>
+              <select className="rounded-lg border border-gray-200 px-3 py-2 text-sm" value={bulkMoveMainTriggerId} onChange={(e) => setBulkMoveTriggerId(e.target.value)}>
+                <option value="">{t('triggers.change')}</option>
+                {selectableTriggerCards.map(trigger => <option key={trigger.id} value={trigger.id}>{t(trigger.name)}</option>)}
               </select>
-              <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={bulkMoveQuestions}>Применить</button>
-              <label className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 cursor-pointer">Импорт CSV<input type="file" accept=".csv,.xlsx" className="hidden" onChange={handleQuestionImport} /></label>
-              <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => exportQuestions('csv')}>Экспорт Excel</button>
-              <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => exportQuestions('pdf')}>Экспорт PDF</button>
-              <span className="ml-auto text-sm text-gray-500">Выбрано: {selectedQuestionIds.length}</span>
+              {bulkMoveMainTriggerId && (
+                bulkMoveSubTriggers.length > 0 ? (
+                  <select className="rounded-lg border border-gray-200 px-3 py-2 text-sm" value={bulkMoveSubTriggerId} onChange={(e) => setBulkMoveTriggerId(e.target.value || bulkMoveMainTriggerId)}>
+                    <option value="">{t('triggers.select_subtrigger')}</option>
+                    {bulkMoveSubTriggers.map(trigger => <option key={trigger.id} value={trigger.id}>{t(trigger.name)}</option>)}
+                  </select>
+                ) : (
+                  <span className="rounded-lg border border-dashed border-gray-300 px-3 py-2 text-sm text-gray-600">{t('triggers.no_subtriggers')}</span>
+                )
+              )}
+              <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={bulkMoveQuestions}>{t('common.apply')}</button>
+              <label className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50 cursor-pointer">{t('questions.import_csv')}<input type="file" accept=".csv,.xlsx" className="hidden" onChange={handleQuestionImport} /></label>
+              <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => exportQuestions('csv')}>{t('export.excel')}</button>
+              <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => exportQuestions('pdf')}>{t('export.pdf')}</button>
+              <span className="ml-auto text-sm text-gray-500">{t('common.selected', { count: selectedQuestionIds.length })}</span>
             </div>
 
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
@@ -2701,7 +2921,7 @@ const TeacherDashboard = () => {
                       <div className="mb-2 flex flex-wrap items-center gap-2">
                         <span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-semibold text-gray-700">#{q.id}</span>
                         <span className="rounded-full bg-blue-50 px-2.5 py-1 text-xs font-semibold text-blue-700">{q.trigger?.name || '-'}</span>
-                        <span className="rounded-full bg-green-50 px-2.5 py-1 text-xs font-semibold text-green-700">Правильный: {q.correct_answer}</span>
+                        <span className="rounded-full bg-green-50 px-2.5 py-1 text-xs font-semibold text-green-700">{t('answers.correct_option', { option: q.correct_answer })}</span>
                       </div>
                       <h5 className="text-base font-bold text-gray-900">{localizeField(q, 'text', language)}</h5>
                     </div>
@@ -2711,16 +2931,16 @@ const TeacherDashboard = () => {
                       <div key={key} className={`rounded-lg px-3 py-2 text-sm ${q.correct_answer === key ? 'bg-green-600 text-white' : 'bg-gray-50 text-gray-700'}`}>{key}. {localizeField(q, `option_${key.toLowerCase()}`, language)}</div>
                     ))}
                   </div>
-                  <div className="mt-3 text-xs text-gray-500">Создан: {q.created_at ? new Date(q.created_at).toLocaleString('ru-RU') : '-'}</div>
+                  <div className="mt-3 text-xs text-gray-500">{t('common.created_colon')} {q.created_at ? new Date(q.created_at).toLocaleString(language === 'ru' ? 'ru-RU' : 'ky-KG') : '-'}</div>
                   <div className="mt-4 flex flex-wrap gap-2">
-                    <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => startEditQuestion(q)}>Редактировать</button>
-                    <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => setQuestionDrawer(q)}>Просмотр</button>
-                    <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => copyQuestion(q)}>Копировать</button>
+                    <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => startEditQuestion(q)}>{t('common.edit')}</button>
+                    <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => setQuestionDrawer(q)}>{t('common.view')}</button>
+                    <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => copyQuestion(q)}>{t('common.copy')}</button>
                     <select className="rounded-lg border border-gray-200 px-3 py-2 text-sm" onChange={(e) => moveQuestionToTrigger(q, e.target.value)} defaultValue="">
-                      <option value="">Переместить</option>
+                      <option value="">{t('common.move')}</option>
                       {(triggers || []).map(trigger => <option key={trigger.id} value={trigger.id}>{trigger.name}</option>)}
                     </select>
-                    <button type="button" className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-100" onClick={() => handleDeleteQuestion(q.id)}>Удалить</button>
+                    <button type="button" className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-100" onClick={() => handleDeleteQuestion(q.id)}>{t('common.delete')}</button>
                   </div>
                 </div>
               ))}
@@ -2728,33 +2948,33 @@ const TeacherDashboard = () => {
 
             <div className="mt-5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <select className="rounded-lg border border-gray-200 px-3 py-2 text-sm" value={questionManagerPageSize} onChange={(e) => { setQuestionManagerPageSize(Number(e.target.value)); setQuestionManagerPage(1); }}>
-                {[10, 25, 50, 100].map(size => <option key={size} value={size}>{size} на странице</option>)}
+                {[10, 25, 50, 100].map(size => <option key={size} value={size}>{t('pagination.per_page', { count: size })}</option>)}
               </select>
               <div className="flex items-center gap-2">
-                <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 disabled:opacity-50" disabled={questionSafePage <= 1} onClick={() => setQuestionManagerPage(page => Math.max(1, page - 1))}>Назад</button>
+                <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 disabled:opacity-50" disabled={questionSafePage <= 1} onClick={() => setQuestionManagerPage(page => Math.max(1, page - 1))}>{t('common.back')}</button>
                 <span className="text-sm font-semibold text-gray-700">{questionSafePage} / {questionTotalPages}</span>
-                <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 disabled:opacity-50" disabled={questionSafePage >= questionTotalPages} onClick={() => setQuestionManagerPage(page => Math.min(questionTotalPages, page + 1))}>Далее</button>
+                <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 disabled:opacity-50" disabled={questionSafePage >= questionTotalPages} onClick={() => setQuestionManagerPage(page => Math.min(questionTotalPages, page + 1))}>{t('common.next')}</button>
               </div>
             </div>
           </div>
 
           {questionDrawer && (
             <div className="fixed inset-0 z-50 flex justify-end bg-black/30">
-              <button type="button" className="absolute inset-0 cursor-default" onClick={() => setQuestionDrawer(null)} aria-label="Закрыть" />
+              <button type="button" className="absolute inset-0 cursor-default" onClick={() => setQuestionDrawer(null)} aria-label={t('common.close')} />
               <div className="relative h-full w-full max-w-xl overflow-y-auto bg-white p-5 shadow-2xl">
                 <div className="mb-5 flex items-start justify-between gap-3">
-                  <div><h4 className="text-xl font-bold text-gray-900">Вопрос #{questionDrawer.id}</h4><p className="text-sm text-gray-500">История изменений: создан {questionDrawer.created_at ? new Date(questionDrawer.created_at).toLocaleString('ru-RU') : '-'}</p></div>
-                  <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => setQuestionDrawer(null)}>Закрыть</button>
+                  <div><h4 className="text-xl font-bold text-gray-900">{t('questions.question')} #{questionDrawer.id}</h4><p className="text-sm text-gray-500">{t('questions.history_created', { date: questionDrawer.created_at ? new Date(questionDrawer.created_at).toLocaleString(language === 'ru' ? 'ru-RU' : 'ky-KG') : '-' })}</p></div>
+                  <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => setQuestionDrawer(null)}>{t('common.close')}</button>
                 </div>
-                <p className="rounded-xl bg-gray-50 p-4 text-base font-semibold text-gray-900">{questionDrawer.text}</p>
+                <p className="rounded-xl bg-gray-50 p-4 text-base font-semibold text-gray-900">{localizeField(questionDrawer, 'text', language)}</p>
                 <div className="mt-4 space-y-2">
-                  {['A', 'B', 'C', 'D'].map((key) => questionDrawer[`option_${key.toLowerCase()}`] && (
-                    <div key={key} className={`rounded-xl px-4 py-3 ${questionDrawer.correct_answer === key ? 'bg-green-600 text-white' : 'bg-gray-50 text-gray-700'}`}>{key}. {questionDrawer[`option_${key.toLowerCase()}`]}</div>
+                  {['A', 'B', 'C', 'D'].map((key) => localizeField(questionDrawer, `option_${key.toLowerCase()}`, language) && (
+                    <div key={key} className={`rounded-xl px-4 py-3 ${questionDrawer.correct_answer === key ? 'bg-green-600 text-white' : 'bg-gray-50 text-gray-700'}`}>{key}. {localizeField(questionDrawer, `option_${key.toLowerCase()}`, language)}</div>
                   ))}
                 </div>
                 <div className="mt-5 grid grid-cols-2 gap-3">
-                  <div className="rounded-xl border border-gray-200 p-4"><p className="text-xs text-gray-500">Правильный ответ</p><p className="font-bold text-gray-900">{questionDrawer.correct_answer}</p></div>
-                  <div className="rounded-xl border border-gray-200 p-4"><p className="text-xs text-gray-500">Триггер</p><p className="font-bold text-gray-900">{questionDrawer.trigger?.name || '-'}</p></div>
+                  <div className="rounded-xl border border-gray-200 p-4"><p className="text-xs text-gray-500">{t('answers.correct_answer')}</p><p className="font-bold text-gray-900">{questionDrawer.correct_answer}</p></div>
+                  <div className="rounded-xl border border-gray-200 p-4"><p className="text-xs text-gray-500">{t('triggers.trigger')}</p><p className="font-bold text-gray-900">{questionDrawer.trigger?.name || '-'}</p></div>
                 </div>
               </div>
             </div>
@@ -2872,6 +3092,90 @@ const TeacherDashboard = () => {
           </div>
 
           <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
+            <div className="mb-5">
+              <h4 className="text-xl font-semibold text-gray-900">{t('triggers.create_subtrigger')}</h4>
+              <p className="text-sm text-gray-500">{t('triggers.create_subtrigger_hint')}</p>
+            </div>
+            <form onSubmit={handleCreateSubTrigger} className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <div>
+                <label className="mb-2 block text-sm font-semibold text-gray-700">
+                  {t('triggers.parent_trigger')}
+                </label>
+                <select
+                  className="input-modern"
+                  value={newSubTrigger.parent}
+                  onChange={(e) => setNewSubTrigger({ ...newSubTrigger, parent: e.target.value })}
+                  required
+                >
+                  <option value="">{t('triggers.select_parent_trigger')}</option>
+                  {selectableTriggerCards.map((trigger) => (
+                    <option key={trigger.id} value={trigger.id}>{t(trigger.name)}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-semibold text-gray-700">
+                  {t('triggers.subtrigger_name')}
+                </label>
+                <input
+                  className="input-modern"
+                  value={newSubTrigger.name}
+                  onChange={(e) => {
+                    const name = e.target.value;
+                    setNewSubTrigger({
+                      ...newSubTrigger,
+                      name,
+                      slug: newSubTrigger.slugEdited ? newSubTrigger.slug : buildSlug(name)
+                    });
+                  }}
+                  required
+                  placeholder={t('triggers.subtrigger_name_placeholder')}
+                />
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-semibold text-gray-700">
+                  {t('triggers.subtrigger_code')}
+                </label>
+                <input
+                  className="input-modern"
+                  value={newSubTrigger.slug}
+                  onChange={(e) => setNewSubTrigger({ ...newSubTrigger, slug: buildSlug(e.target.value), slugEdited: true })}
+                  placeholder={t('triggers.subtrigger_code_placeholder')}
+                />
+                <p className="mt-1 text-xs text-gray-500">{t('triggers.subtrigger_code_hint')}</p>
+              </div>
+              <div>
+                <label className="mb-2 block text-sm font-semibold text-gray-700">
+                  {t('common.description')}
+                </label>
+                <textarea
+                  className="input-modern min-h-[96px]"
+                  value={newSubTrigger.description}
+                  onChange={(e) => setNewSubTrigger({ ...newSubTrigger, description: e.target.value })}
+                  placeholder={t('triggers.description_placeholder')}
+                />
+              </div>
+              <div className="lg:col-span-2 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <label className="inline-flex items-center gap-3 rounded-xl border border-gray-200 bg-gray-50 px-4 py-3">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-gray-300 text-green-600"
+                    checked={newSubTrigger.is_active}
+                    onChange={(e) => setNewSubTrigger({ ...newSubTrigger, is_active: e.target.checked })}
+                  />
+                  <span>
+                    <span className="block text-sm font-semibold text-gray-900">{newSubTrigger.is_active ? t('common.active') : t('common.inactive')}</span>
+                    <span className="block text-xs text-gray-500">{t('triggers.inactive_hint')}</span>
+                  </span>
+                </label>
+                <button type="submit" className="rounded-lg bg-green-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm hover:bg-green-700">
+                  {t('triggers.create_subtrigger')}
+                </button>
+              </div>
+            </form>
+          </div>
+
+          <div className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm">
             <div className="mb-4 flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
               <div>
                 <h4 className="text-xl font-semibold text-gray-900">{t('triggers.triggers')}</h4>
@@ -2903,6 +3207,18 @@ const TeacherDashboard = () => {
                 <div key={trigger.id} className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md">
                   {editingTriggerId === trigger.id ? (
                     <form onSubmit={handleUpdateTrigger} className="space-y-3">
+                      <select
+                        className="input-modern"
+                        value={editingTrigger.parent}
+                        onChange={(e) => setEditingTrigger({...editingTrigger, parent: e.target.value})}
+                      >
+                        <option value="">{t('triggers.main_trigger')}</option>
+                        {selectableTriggerCards
+                          .filter((parent) => parent.id !== trigger.id)
+                          .map((parent) => (
+                            <option key={parent.id} value={parent.id}>{t(parent.name)}</option>
+                          ))}
+                      </select>
                       <input className="input-modern" value={editingTrigger.name} onChange={(e) => setEditingTrigger({...editingTrigger, name: e.target.value})} required />
                       <input className="input-modern" value={editingTrigger.slug} onChange={(e) => setEditingTrigger({...editingTrigger, slug: e.target.value})} required />
                       <textarea className="input-modern min-h-[80px]" value={editingTrigger.description} onChange={(e) => setEditingTrigger({...editingTrigger, description: e.target.value})} />
@@ -2969,7 +3285,7 @@ const TeacherDashboard = () => {
                                 </button>
                                 <div className="mt-2 flex flex-wrap gap-2">
                                   <label className="cursor-pointer rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50">
-                                    Импорт вопросов
+                                    {t('questions.import')}
                                     <input
                                       type="file"
                                       accept=".csv,.docx,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -2982,7 +3298,7 @@ const TeacherDashboard = () => {
                                     className="rounded-md border border-gray-200 px-2.5 py-1 text-xs font-semibold text-gray-700 hover:bg-gray-50"
                                     onClick={() => exportTriggerQuestions(child)}
                                   >
-                                    Экспорт вопросов
+                                    {t('questions.export')}
                                   </button>
                                 </div>
                               </div>
@@ -3001,7 +3317,7 @@ const TeacherDashboard = () => {
                         <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => openTriggerQuestions(trigger)}>{t('common.view')}</button>
                         <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => openTriggerQuestions(trigger)}>{t('questions.section')}</button>
                         <label className="cursor-pointer rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50">
-                          Импорт вопросов
+                          {t('questions.import')}
                           <input
                             type="file"
                             accept=".csv,.docx,text/csv,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
@@ -3009,7 +3325,7 @@ const TeacherDashboard = () => {
                             onChange={(event) => openQuestionImportTargetDialog(event, trigger)}
                           />
                         </label>
-                        <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => exportTriggerQuestions(trigger)}>Экспорт вопросов</button>
+                        <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => exportTriggerQuestions(trigger)}>{t('questions.export')}</button>
                         <button type="button" className="rounded-lg border border-gray-200 px-3 py-2 text-sm font-semibold text-gray-700 hover:bg-gray-50" onClick={() => openTriggerQuestions(trigger)}>{t('stats.statistics')}</button>
                         <button type="button" className="rounded-lg border border-red-100 bg-red-50 px-3 py-2 text-sm font-semibold text-red-700 hover:bg-red-100" onClick={() => handleDeleteTrigger(trigger)}>{t('common.delete')}</button>
                       </div>
@@ -3134,7 +3450,7 @@ const TeacherDashboard = () => {
                 onClick={() => handleDownloadSummaryPdf('ru')}
                 disabled={summaryDownloading}
               >
-                {summaryDownloading ? t('Формирование...') : 'Скачать PDF на русском'}
+                {summaryDownloading ? t('common.generating') : t('export.download_pdf_ru')}
               </button>
               <button
                 type="button"
@@ -3142,7 +3458,7 @@ const TeacherDashboard = () => {
                 onClick={() => handleDownloadSummaryPdf('kg')}
                 disabled={summaryDownloading}
               >
-                {summaryDownloading ? t('Формирование...') : 'Кыргызча PDF жүктөө'}
+                {summaryDownloading ? t('common.generating') : t('export.download_pdf_ky')}
               </button>
             </div>
           </div>
@@ -3201,14 +3517,14 @@ const TeacherDashboard = () => {
                     return (
                       <tr key={result.id} className="hover:bg-gray-50">
                         <td className="w-[200px] min-w-[200px] px-4 py-4 align-top">
-                          <div className="text-sm font-medium text-gray-900 break-words">{result.student_name}</div>
+                          <div className="text-sm font-medium text-gray-900 break-words">{getStudentName(result)}</div>
                           <div className="text-sm text-gray-500 break-all">@{result.student_username}</div>
                         </td>
                         <td className="w-[300px] min-w-[300px] px-4 py-4 align-top text-sm text-gray-900 break-words">
-                          {result.test_title}
+                          {localizeDisplayText(result.test_title)}
                         </td>
                         <td className="w-[240px] min-w-[240px] px-4 py-4 align-top text-sm text-gray-500 break-words">
-                          {formatTriggers(result.triggers) || '-'}
+                          {formatLocalizedTriggers(result.triggers) || '-'}
                         </td>
                         <td className="w-[140px] min-w-[140px] px-4 py-4 align-top">
                           <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
@@ -3239,7 +3555,7 @@ const TeacherDashboard = () => {
                           </span>
                         </td>
                         <td className="px-4 py-4 align-top text-sm text-gray-500" style={{ width: '220px', minWidth: '220px', whiteSpace: 'nowrap', overflow: 'visible' }}>
-                          {result.completed_at ? new Date(result.completed_at).toLocaleString('ru-RU') : '-'}
+                          {formatLocalizedDateTime(result.completed_at)}
                         </td>
                       </tr>
                     );
@@ -3660,9 +3976,9 @@ const TeacherDashboard = () => {
       {pendingQuestionSubmit && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
-            <h4 className="text-xl font-bold text-gray-900">Куда добавить вопрос?</h4>
+            <h4 className="text-xl font-bold text-gray-900">{t('questions.add_target_title')}</h4>
             <p className="mt-1 text-sm text-gray-500">
-              Выберите триггер/категорию. Вопрос будет сохранён только после подтверждения.
+              {t('questions.add_target_hint')}
             </p>
             <select
               className="input-modern mt-4"
@@ -3670,7 +3986,7 @@ const TeacherDashboard = () => {
               onChange={(e) => setQuestionTargetTriggerId(e.target.value)}
               autoFocus
             >
-              <option value="">Выберите триггер/категорию</option>
+              <option value="">{t('questions.select_category')}</option>
               {(triggers || []).map((trigger) => (
                 <option key={trigger.id} value={trigger.id}>
                   {trigger.name}
@@ -3686,14 +4002,14 @@ const TeacherDashboard = () => {
                   setQuestionTargetTriggerId('');
                 }}
               >
-                Отмена
+                {t('common.cancel')}
               </button>
               <button
                 type="button"
                 className="rounded-lg bg-green-600 px-4 py-2 text-sm font-bold text-white hover:bg-green-700"
                 onClick={confirmQuestionSubmit}
               >
-                Добавить в выбранную категорию
+                {t('questions.add_to_selected_category')}
               </button>
             </div>
           </div>
@@ -3703,9 +4019,9 @@ const TeacherDashboard = () => {
       {pendingQuestionImportFile && (
         <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/40 p-4">
           <div className="w-full max-w-md rounded-2xl bg-white p-6 shadow-2xl">
-            <h4 className="text-xl font-bold text-gray-900">Куда импортировать вопросы?</h4>
+            <h4 className="text-xl font-bold text-gray-900">{t('questions.import_target_title')}</h4>
             <p className="mt-1 text-sm text-gray-500">
-              Файл: <span className="font-semibold text-gray-700">{pendingQuestionImportFile.name}</span>
+              {t('common.file_colon')} <span className="font-semibold text-gray-700">{pendingQuestionImportFile.name}</span>
             </p>
             <select
               className="input-modern mt-4"
@@ -3713,7 +4029,7 @@ const TeacherDashboard = () => {
               onChange={(e) => setQuestionImportTargetTriggerId(e.target.value)}
               autoFocus
             >
-              <option value="">Выберите триггер/категорию</option>
+              <option value="">{t('questions.select_category')}</option>
               {(triggers || []).map((trigger) => (
                 <option key={trigger.id} value={trigger.id}>
                   {trigger.name}
@@ -3729,14 +4045,14 @@ const TeacherDashboard = () => {
                   setQuestionImportTargetTriggerId('');
                 }}
               >
-                Отмена
+                {t('common.cancel')}
               </button>
               <button
                 type="button"
                 className="rounded-lg bg-green-600 px-4 py-2 text-sm font-bold text-white hover:bg-green-700"
                 onClick={confirmQuestionImport}
               >
-                Импортировать в выбранную категорию
+                {t('questions.import_to_selected_category')}
               </button>
             </div>
           </div>

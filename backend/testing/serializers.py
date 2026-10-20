@@ -1,6 +1,11 @@
 from core.serializer_utils import *
 from accounts.serializers import UserSerializer
-from questions.serializers import QuestionListSerializer, QuestionSerializer, QuestionTriggerSerializer
+from questions.serializers import (
+    QuestionListSerializer,
+    QuestionSerializer,
+    QuestionTriggerSerializer,
+    QuestionTriggerSummarySerializer,
+)
 
 class TestSerializer(serializers.ModelSerializer):
     teacher = UserSerializer(read_only=True)
@@ -14,7 +19,7 @@ class TestSerializer(serializers.ModelSerializer):
 
     def get_triggers(self, obj):
         triggers = get_public_triggers_for_test(obj, QuestionTrigger)
-        return QuestionTriggerSerializer(triggers, many=True).data
+        return QuestionTriggerSummarySerializer(triggers, many=True).data
 
 
 class TestCreateSerializer(serializers.ModelSerializer):
@@ -63,6 +68,13 @@ class TestCreateSerializer(serializers.ModelSerializer):
             random.shuffle(question_ids)
             questions_by_trigger[trigger.id] = question_ids
             total_available += len(question_ids)
+
+        if 0 < total_available < 100:
+            selected_ids = []
+            for trigger in triggers:
+                selected_ids.extend(questions_by_trigger[trigger.id])
+            random.shuffle(selected_ids)
+            return selected_ids
 
         if is_officer_only_selection(triggers):
             selected_ids, error = build_officer_question_ids(questions_by_trigger.get(trigger_ids[0], []))
@@ -141,7 +153,7 @@ class TestCreateSerializer(serializers.ModelSerializer):
 
 class TestListSerializer(serializers.ModelSerializer):
     teacher_name = serializers.CharField(source='teacher.get_full_name', read_only=True)
-    question_count = serializers.IntegerField(source='questions.count', read_only=True)
+    question_count = serializers.SerializerMethodField()
     completed_attempts = serializers.IntegerField(read_only=True, default=0)
     attempts_left = serializers.SerializerMethodField()
     triggers = serializers.SerializerMethodField()
@@ -157,9 +169,15 @@ class TestListSerializer(serializers.ModelSerializer):
         completed_attempts = getattr(obj, 'completed_attempts', 0) or 0
         return max(0, 1 - completed_attempts)
 
+    def get_question_count(self, obj):
+        annotated_count = getattr(obj, 'question_count_db', None)
+        if annotated_count is not None:
+            return annotated_count
+        return obj.questions.count()
+
     def get_triggers(self, obj):
         triggers = get_public_triggers_for_test(obj, QuestionTrigger)
-        return QuestionTriggerSerializer(triggers, many=True).data
+        return QuestionTriggerSummarySerializer(triggers, many=True).data
 
 
 class AnswerSerializer(serializers.ModelSerializer):
@@ -193,7 +211,7 @@ class AttemptListSerializer(serializers.ModelSerializer):
     test_title = serializers.CharField(source='test.title', read_only=True)
     student_name = serializers.CharField(source='student.get_full_name', read_only=True)
     triggers = serializers.JSONField(source='triggers_snapshot', read_only=True)
-    selected_trigger = QuestionTriggerSerializer(read_only=True)
+    selected_trigger = QuestionTriggerSummarySerializer(read_only=True)
     
     class Meta:
         model = Attempt

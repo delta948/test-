@@ -1,11 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 
 const ACTIVE_TEST_CONFIG_STORAGE_KEY = 'activeTestConfig';
 
 const StudentProfileSetup = () => {
   const { user, updateStudentProfile } = useAuth();
+  const { t } = useLanguage();
   const navigate = useNavigate();
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -63,8 +65,8 @@ const StudentProfileSetup = () => {
       <div className="w-full max-w-xl animate-fade-in">
         <div className="glass-card rounded-2xl p-8">
           <div className="mb-8">
-            <h2 className="text-3xl font-bold text-gray-900">Аскер кызматчынын маалыматы</h2>
-            <p className="text-gray-500 mt-2">Заполните поля перед началом теста</p>
+            <h2 className="text-3xl font-bold text-gray-900">{t('Данные военнослужащего')}</h2>
+            <p className="text-gray-500 mt-2">{t('Заполните поля перед началом теста')}</p>
           </div>
 
           {error && (
@@ -75,7 +77,7 @@ const StudentProfileSetup = () => {
 
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Воинское звание</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">{t('Воинское звание')}</label>
               <input
                 type="text"
                 className="input-modern"
@@ -83,12 +85,12 @@ const StudentProfileSetup = () => {
                 value={formData.military_rank}
                 onChange={handleChange}
                 required
-                placeholder="Например: рядовой"
+                placeholder={t('Например: рядовой')}
               />
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Орган управления</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">{t('Орган управления')}</label>
               <input
                 type="text"
                 className="input-modern"
@@ -100,7 +102,7 @@ const StudentProfileSetup = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Фамилия</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">{t('Фамилия')}</label>
               <input
                 type="text"
                 className="input-modern"
@@ -112,7 +114,7 @@ const StudentProfileSetup = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Имя</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">{t('Имя')}</label>
               <input
                 type="text"
                 className="input-modern"
@@ -124,7 +126,7 @@ const StudentProfileSetup = () => {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Отчество</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">{t('Отчество')}</label>
               <input
                 type="text"
                 className="input-modern"
@@ -140,7 +142,7 @@ const StudentProfileSetup = () => {
               className="w-full py-4 px-6 bg-gradient-to-r from-green-600 to-green-500 text-white font-semibold rounded-xl shadow-lg hover:shadow-xl transition-all duration-300 hover:-translate-y-0.5 disabled:opacity-50 disabled:cursor-not-allowed"
               disabled={loading}
             >
-              {loading ? 'Сохранение...' : 'Продолжить к тесту'}
+              {loading ? t('Сохранение...') : t('Продолжить к тесту')}
             </button>
           </form>
         </div>

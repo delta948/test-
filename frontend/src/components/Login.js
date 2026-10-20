@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 
 const Login = () => {
   const [formData, setFormData] = useState({
@@ -11,6 +12,7 @@ const Login = () => {
   const [loading, setLoading] = useState(false);
   
   const { login } = useAuth();
+  const { t } = useLanguage();
   const navigate = useNavigate();
 
   const handleChange = (e) => {
@@ -52,8 +54,8 @@ const Login = () => {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
               </svg>
             </div>
-            <h2 className="text-3xl font-bold text-gray-900">Вход в систему</h2>
-            <p className="text-gray-500 mt-2">Тестирование</p>
+            <h2 className="text-3xl font-bold text-gray-900">{t('Вход в систему')}</h2>
+            <p className="text-gray-500 mt-2">{t('Тестирование')}</p>
           </div>
           
           {error && (
@@ -67,7 +69,7 @@ const Login = () => {
           
           <form onSubmit={handleSubmit} className="space-y-5">
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Имя пользователя</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">{t('Имя пользователя')}</label>
               <input
                 type="text"
                 className="input-modern"
@@ -75,12 +77,12 @@ const Login = () => {
                 value={formData.username}
                 onChange={handleChange}
                 required
-                placeholder="Введите имя пользователя"
+                placeholder={t('Введите имя пользователя')}
               />
             </div>
             
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Пароль</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">{t('Пароль')}</label>
               <input
                 type="password"
                 className="input-modern"
@@ -88,7 +90,7 @@ const Login = () => {
                 value={formData.password}
                 onChange={handleChange}
                 required
-                placeholder="Введите пароль"
+                placeholder={t('Введите пароль')}
               />
             </div>
             
@@ -100,10 +102,10 @@ const Login = () => {
               {loading ? (
                 <span className="flex items-center justify-center gap-2">
                   <div className="spinner-modern w-5 h-5 border-2"></div>
-                  Вход...
+                  {t('Вход...')}
                 </span>
               ) : (
-                'Войти'
+                t('Войти')
               )}
             </button>
           </form>

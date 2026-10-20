@@ -13,6 +13,7 @@ from django.db.models import Avg, Case, Count, IntegerField, Q, When
 from django.utils import timezone
 from django.conf import settings
 from datetime import timedelta
+import math
 from io import BytesIO
 import logging
 import os
@@ -34,6 +35,7 @@ from .trigger_visibility import (
     get_public_triggers_for_test,
     get_question_filter_for_public_triggers,
     public_triggers_queryset,
+    visible_triggers_queryset,
     test_allows_public_trigger,
 )
 
@@ -50,6 +52,13 @@ logger = logging.getLogger(__name__)
 
 def get_attempt_expires_at(attempt):
     return attempt.started_at + TEST_DURATION
+
+
+def get_attempt_remaining_seconds(attempt, now=None):
+    """Return the server-authoritative whole seconds left for an attempt."""
+    current_time = now or timezone.now()
+    remaining = (get_attempt_expires_at(attempt) - current_time).total_seconds()
+    return max(0, math.ceil(remaining))
 
 
 def get_request_language(request):
@@ -235,7 +244,7 @@ def should_use_all_available_questions(triggers):
 
 
 def get_min_questions_for_trigger(trigger):
-    return 1 if getattr(trigger, 'slug', '') in VARIABLE_QUESTION_COUNT_TRIGGER_SLUGS else QUESTIONS_PER_ATTEMPT
+    return 1
 
 
 def build_question_ids_for_triggers(triggers, language='ky'):
@@ -245,7 +254,7 @@ def build_question_ids_for_triggers(triggers, language='ky'):
         .values_list('id', flat=True)
     )
 
-    if len(question_ids) < QUESTIONS_PER_ATTEMPT:
+    if not question_ids:
         if (
             len(triggers) == 1 and
             getattr(triggers[0], 'slug', '') in SPECIAL_TRAINING_SUBTRIGGER_SLUGS
@@ -253,7 +262,11 @@ def build_question_ids_for_triggers(triggers, language='ky'):
             return [], 'В выбранной подкатегории меньше 100 вопросов'
         return [], 'Для данной категории недостаточно вопросов'
 
-    selected_ids = random.sample(question_ids, QUESTIONS_PER_ATTEMPT)
+    selected_ids = (
+        random.sample(question_ids, QUESTIONS_PER_ATTEMPT)
+        if len(question_ids) > QUESTIONS_PER_ATTEMPT
+        else question_ids[:]
+    )
     random.shuffle(selected_ids)
     return selected_ids, None
 
@@ -312,7 +325,7 @@ def randomize_attempt_questions(attempt):
     if not source_ids:
         source_ids = list(attempt.test.questions.values_list('id', flat=True).distinct())
 
-    if len(source_ids) < QUESTIONS_PER_ATTEMPT:
+    if not source_ids:
         return [], {}, 'Недостаточно вопросов для теста'
 
     if len(source_ids) > QUESTIONS_PER_ATTEMPT:
@@ -520,12 +533,13 @@ def get_summary_title(title=None, language='ru'):
 
 def build_summary_table(rows, language='ru'):
     headers = [
-        'ФИО', 'Звание', 'Орган упр.', 'Логин', 'Экзаменатор', 'Тест / категория',
+        '№', 'ФИО', 'Звание', 'Орган упр.', 'Логин', 'Экзаменатор', 'Тест / категория',
         'Прав.', 'Неправ.', 'Балл', '%', 'Дата и время',
     ]
     table_rows = [[summary_t(header, language) for header in headers]]
-    for row in rows:
+    for index, row in enumerate(rows, start=1):
         table_rows.append([
+            str(index),
             row.get('student_name') or '',
             row.get('military_rank') or '',
             row.get('management_body') or '',
@@ -600,23 +614,24 @@ def generate_summary_pdf(rows, title=None, teacher_name=None, language='ru'):
     table_rows[0] = [paragraph(header, header_style) for header in table_rows[0]]
     for row_index, row in enumerate(table_rows[1:], start=1):
         table_rows[row_index] = [
-            paragraph(row[0]),
+            paragraph(row[0], centered_cell_style),
             paragraph(row[1]),
             paragraph(row[2]),
-            paragraph(row[3], centered_cell_style),
+            paragraph(row[3]),
             paragraph(row[4]),
             paragraph(row[5]),
-            paragraph(row[6], centered_cell_style),
+            paragraph(row[6]),
             paragraph(row[7], centered_cell_style),
             paragraph(row[8], centered_cell_style),
             paragraph(row[9], centered_cell_style),
             paragraph(row[10], centered_cell_style),
+            paragraph(row[11], centered_cell_style),
         ]
 
     table = Table(
         table_rows,
         repeatRows=1,
-        colWidths=[42 * mm, 24 * mm, 35 * mm, 22 * mm, 32 * mm, 46 * mm, 14 * mm, 19 * mm, 16 * mm, 10 * mm, 25 * mm],
+        colWidths=[8 * mm, 40 * mm, 23 * mm, 33 * mm, 20 * mm, 31 * mm, 45 * mm, 14 * mm, 19 * mm, 16 * mm, 10 * mm, 26 * mm],
     )
     table.setStyle(TableStyle([
         ('FONTNAME', (0, 0), (-1, -1), font_name),
@@ -626,8 +641,9 @@ def generate_summary_pdf(rows, title=None, teacher_name=None, language='ru'):
         ('VALIGN', (0, 0), (-1, -1), 'TOP'),
         ('VALIGN', (0, 0), (-1, 0), 'MIDDLE'),
         ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
-        ('ALIGN', (3, 1), (3, -1), 'CENTER'),
-        ('ALIGN', (6, 1), (10, -1), 'CENTER'),
+        ('ALIGN', (0, 1), (0, -1), 'CENTER'),
+        ('ALIGN', (4, 1), (4, -1), 'CENTER'),
+        ('ALIGN', (7, 1), (11, -1), 'CENTER'),
         ('LEFTPADDING', (0, 0), (-1, -1), 2.2),
         ('RIGHTPADDING', (0, 0), (-1, -1), 2.2),
         ('TOPPADDING', (0, 0), (-1, 0), 4),
@@ -739,7 +755,7 @@ def get_attempt_questions(attempt):
         attempt.questions.values_list('id', flat=True)
     )
     
-    if len(question_ids) != QUESTIONS_PER_ATTEMPT:
+    if not question_ids:
         return Question.objects.none()
 
     preserved_order = Case(

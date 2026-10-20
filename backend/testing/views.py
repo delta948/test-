@@ -18,23 +18,25 @@ class TestListCreateView(generics.ListCreateAPIView):
     
     def get_queryset(self):
         user = self.request.user
-        queryset = Test.objects.select_related('teacher').prefetch_related('questions', 'triggers')
+        # The list serializer only needs the number of questions. Prefetching every
+        # question made the teacher dashboard load hundreds/thousands of full rows.
+        queryset = Test.objects.select_related('teacher').prefetch_related('triggers').annotate(
+            question_count_db=Count('questions', distinct=True)
+        )
 
         if user.is_staff or user.is_superuser or getattr(user, 'role', None) == 'admin':
-            return queryset.annotate(question_count_db=Count('questions', distinct=True)).filter(
-                question_count_db__gte=QUESTIONS_PER_ATTEMPT
-            )
+            return queryset.filter(question_count_db__gte=1)
 
         if user.is_teacher():
             return queryset.filter(teacher=user)
 
         return queryset.filter(is_active=True).annotate(
-            question_count_db=Count('questions', distinct=True),
             completed_attempts=Count(
                 'attempts',
-                filter=Q(attempts__student=user, attempts__status='completed')
+                filter=Q(attempts__student=user, attempts__status='completed'),
+                distinct=True,
             )
-        ).filter(question_count_db__gte=QUESTIONS_PER_ATTEMPT)
+        ).filter(question_count_db__gte=1)
 
     def create(self, request, *args, **kwargs):
         user = request.user
@@ -117,7 +119,7 @@ class AvailableTestsView(generics.ListAPIView):
             )
         ).filter(
             question_count_db__gte=1
-        ).select_related('teacher').prefetch_related('questions', 'triggers')
+        ).select_related('teacher').prefetch_related('triggers')
 
 
 class StartAttemptView(APIView):
@@ -267,45 +269,62 @@ class StartAttemptView(APIView):
         if False:
             return error_response('Тест должен содержать ровно 100 вопросов', status.HTTP_400_BAD_REQUEST)
         
+        resumed_attempt = False
         with transaction.atomic():
-            Attempt.objects.filter(
-                student=request.user,
-                test=test,
-                status='in_progress',
-            ).delete()
-
-            period = test.testing_period
-            if not period or period.processed_at:
-                period = get_or_create_current_testing_period(test.teacher)
-                test.testing_period = period
-                test.save(update_fields=['testing_period'])
-
-            attempt = Attempt.objects.create(
-                student=request.user,
-                test=test,
-                military_rank=profile.military_rank,
-                management_body=profile.management_body,
-                last_name=request.user.last_name,
-                first_name=request.user.first_name,
-                middle_name=profile.middle_name,
-                selected_trigger=selected_trigger,
-                testing_period=period,
-                status='in_progress',
-                current_question_index=0,
-                triggers_snapshot=selected_trigger_snapshot,
+            # A double click or a retried start request must not invalidate the
+            # attempt already displayed in the student's browser.
+            User.objects.select_for_update().get(pk=request.user.pk)
+            active_attempt = (
+                Attempt.objects
+                .filter(student=request.user, test=test, status='in_progress')
+                .order_by('-started_at')
+                .first()
             )
-            attempt.question_order = question_ids
-            attempt.answer_order = answer_order
-            attempt.save(update_fields=['question_order', 'answer_order'])
-            attempt.questions.set(question_ids)
+
+            if active_attempt and timezone.now() < get_attempt_expires_at(active_attempt):
+                attempt = active_attempt
+                resumed_attempt = True
+            else:
+                Attempt.objects.filter(
+                    student=request.user,
+                    test=test,
+                    status='in_progress',
+                ).delete()
+
+                period = test.testing_period
+                if not period or period.processed_at:
+                    period = get_or_create_current_testing_period(test.teacher)
+                    test.testing_period = period
+                    test.save(update_fields=['testing_period'])
+
+                attempt = Attempt.objects.create(
+                    student=request.user,
+                    test=test,
+                    military_rank=profile.military_rank,
+                    management_body=profile.management_body,
+                    last_name=request.user.last_name,
+                    first_name=request.user.first_name,
+                    middle_name=profile.middle_name,
+                    selected_trigger=selected_trigger,
+                    testing_period=period,
+                    status='in_progress',
+                    current_question_index=0,
+                    triggers_snapshot=selected_trigger_snapshot,
+                )
+                attempt.question_order = question_ids
+                attempt.answer_order = answer_order
+                attempt.save(update_fields=['question_order', 'answer_order'])
+                attempt.questions.set(question_ids)
         
         serializer = AttemptSerializer(attempt, context={'request': request})
         response_data = {
             'message': 'Попытка начата',
             'attempt': serializer.data,
+            'resumed': resumed_attempt,
             'attempt_number': completed_attempts + 1,
             'attempts_left': MAX_TEST_ATTEMPTS - completed_attempts - 1,
             'expires_at': get_attempt_expires_at(attempt),
+            'remaining_seconds': get_attempt_remaining_seconds(attempt),
             'duration_seconds': int(TEST_DURATION.total_seconds())
         }
         logger.info(
@@ -479,6 +498,7 @@ class GetTestQuestionsView(APIView):
             },
             'show_correct_answers': show_correct_answers,
             'expires_at': get_attempt_expires_at(attempt),
+            'remaining_seconds': get_attempt_remaining_seconds(attempt),
             'duration_seconds': int(TEST_DURATION.total_seconds())
         })
 
@@ -552,18 +572,30 @@ class CompleteTestView(APIView):
             attempt = Attempt.objects.get(
                 id=attempt_id,
                 student=request.user,
-                status='in_progress'
             )
         except Attempt.DoesNotExist:
             return Response({'error': 'Попытка не найдена или уже завершена'}, status=status.HTTP_404_NOT_FOUND)
+
+        # If the first successful response was lost, a retry must still be
+        # treated as success instead of leaving the button apparently stuck.
+        if attempt.status == 'completed':
+            correct_count = attempt.answers.filter(is_correct=True).count()
+            total_questions = attempt.total_questions()
+            answered_count = attempt.answers.count()
+            return Response({
+                'message': 'Тест уже завершен',
+                'score': correct_count,
+                'total_questions': total_questions,
+                'correct_answers': correct_count,
+                'incorrect_answers': total_questions - correct_count,
+                'answered_count': answered_count,
+                'unanswered_count': total_questions - answered_count,
+                'timed_out': False,
+                'already_completed': True,
+            })
         
         timed_out = bool(request.data.get('timed_out')) or timezone.now() >= get_attempt_expires_at(attempt)
         answered_count = attempt.answers.count()
-        if answered_count < 1 and not timed_out:
-            return Response(
-                {'error': 'Нужно ответить хотя бы на один вопрос, чтобы завершить тест'},
-                status=status.HTTP_400_BAD_REQUEST
-            )
 
         correct_count = attempt.answers.filter(is_correct=True).count()
         total_questions = attempt.total_questions()

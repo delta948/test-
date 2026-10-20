@@ -29,6 +29,7 @@ PUBLIC_TRIGGER_DEFAULTS = (
 )
 OFFICER_SOURCE_TRIGGER_SLUGS = ('officer',)
 HIDDEN_TRIGGER_SLUGS = ('sergeant_warrant', 'junior_officer', 'senior_officer')
+NON_PUBLIC_TESTING_TRIGGER_SLUGS = ('sostav101', 'odim11')
 
 PUBLIC_TRIGGER_NAMES = (
     'Абитуриент',
@@ -46,6 +47,7 @@ HIDDEN_TRIGGER_NAMES = (
     'Контрольный срез знаний сержантов и прапорщиков',
     'Контрольный срез знаний старшего офицерского состава',
 )
+NON_PUBLIC_TESTING_TRIGGER_NAMES = ('состав', '1')
 
 
 def public_trigger_ordering():
@@ -82,12 +84,24 @@ def ensure_public_triggers(model):
                 trigger.save(update_fields=['parent'])
 
 
-def public_triggers_queryset(model):
+def visible_triggers_queryset(model, active_only=True):
+    queryset = model.objects.exclude(slug__in=HIDDEN_TRIGGER_SLUGS)
+    if active_only:
+        queryset = queryset.filter(is_active=True)
     return (
-        model.objects.filter(is_active=True)
-        .exclude(slug__in=HIDDEN_TRIGGER_SLUGS)
+        queryset
         .annotate(public_order=public_trigger_ordering())
         .order_by('public_order', 'name')
+    )
+
+
+def public_triggers_queryset(model):
+    return visible_triggers_queryset(model, active_only=True).exclude(
+        Q(slug__in=NON_PUBLIC_TESTING_TRIGGER_SLUGS) |
+        Q(name__in=NON_PUBLIC_TESTING_TRIGGER_NAMES) |
+        Q(parent__is_active=False) |
+        Q(parent__slug__in=NON_PUBLIC_TESTING_TRIGGER_SLUGS) |
+        Q(parent__name__in=NON_PUBLIC_TESTING_TRIGGER_NAMES)
     )
 
 
@@ -96,6 +110,15 @@ def is_public_trigger(trigger):
         trigger
         and getattr(trigger, 'is_active', False)
         and trigger.slug not in HIDDEN_TRIGGER_SLUGS
+        and trigger.slug not in NON_PUBLIC_TESTING_TRIGGER_SLUGS
+        and trigger.name not in NON_PUBLIC_TESTING_TRIGGER_NAMES
+        and not (
+            getattr(trigger, 'parent_id', None) and (
+                not getattr(trigger.parent, 'is_active', False) or
+                trigger.parent.slug in NON_PUBLIC_TESTING_TRIGGER_SLUGS or
+                trigger.parent.name in NON_PUBLIC_TESTING_TRIGGER_NAMES
+            )
+        )
     )
 
 
@@ -158,12 +181,14 @@ def get_public_triggers_for_test(test, model):
 
 
 def test_allows_public_trigger(test, trigger):
-    available_slugs = {
-        available.slug
-        for available in get_public_triggers_for_test(test, type(trigger))
-    }
+    available_triggers = get_public_triggers_for_test(test, type(trigger))
+    available_slugs = {available.slug for available in available_triggers}
+    available_ids = {available.id for available in available_triggers}
     trigger_slug = getattr(trigger, 'slug', '')
     if trigger_slug in available_slugs:
+        return True
+    parent_id = getattr(trigger, 'parent_id', None)
+    if parent_id and parent_id in available_ids:
         return True
     return (
         SPECIAL_TRAINING_SLUG in available_slugs and

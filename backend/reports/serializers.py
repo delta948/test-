@@ -1,14 +1,14 @@
 ﻿from core.serializer_utils import *
-from questions.serializers import QuestionTriggerSerializer
+from questions.serializers import QuestionTriggerSummarySerializer
 
 class StudentResultSerializer(serializers.ModelSerializer):
     student_name = serializers.CharField(source='student.get_full_name', read_only=True)
     student_username = serializers.CharField(source='student.username', read_only=True)
     teacher_name = serializers.CharField(source='test.teacher.get_full_name', read_only=True)
     test_title = serializers.CharField(source='test.title', read_only=True)
-    total_questions = serializers.IntegerField(read_only=True)
+    total_questions = serializers.SerializerMethodField()
     triggers = serializers.JSONField(source='triggers_snapshot', read_only=True)
-    selected_trigger = QuestionTriggerSerializer(read_only=True)
+    selected_trigger = QuestionTriggerSummarySerializer(read_only=True)
     
     class Meta:
         model = Attempt
@@ -16,6 +16,12 @@ class StudentResultSerializer(serializers.ModelSerializer):
             'id', 'student_name', 'student_username', 'test_title',
             'teacher_name', 'score', 'total_questions', 'completed_at', 'triggers', 'selected_trigger'
         ]
+
+    def get_total_questions(self, obj):
+        annotated_count = getattr(obj, 'total_questions_db', None)
+        if annotated_count:
+            return annotated_count
+        return obj.test.questions.count()
 
 
 class SummaryReportSerializer(serializers.ModelSerializer):

@@ -53,7 +53,7 @@ const Register = () => {
     try {
       const response = await axios.post(`${API_URL}/register/`, formData);
       if (response.data.user) {
-        setSuccess('Регистрация успешна! Выполняется вход...');
+        setSuccess(t('Регистрация успешна! Выполняется вход...'));
         const loginResult = await login(formData.username, formData.password);
         if (loginResult.success) {
           setTimeout(() => {
@@ -64,12 +64,12 @@ const Register = () => {
             }
           }, 1000);
         } else {
-          setSuccess('Регистрация успешна! Теперь вы можете войти.');
+          setSuccess(t('Регистрация успешна! Теперь вы можете войти.'));
           setTimeout(() => navigate('/login'), 2000);
         }
       }
     } catch (error) {
-      const errorMsg = error.response?.data?.error || error.response?.data?.username?.[0] || error.response?.data?.email?.[0] || 'Ошибка регистрации';
+      const errorMsg = error.response?.data?.error || error.response?.data?.username?.[0] || error.response?.data?.email?.[0] || t('Ошибка регистрации');
       setError(errorMsg);
     } finally {
       setLoading(false);
@@ -141,7 +141,7 @@ const Register = () => {
           </form>
           
           <div className="text-center mt-3">
-            <p>{t("auto.f7c55f5866")}<Link to="/login">Войти</Link></p>
+            <p>{t("auto.f7c55f5866")}<Link to="/login">{t('Войти')}</Link></p>
           </div>
         </div>
       </div>

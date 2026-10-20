@@ -16,7 +16,12 @@ class QuestionTriggerListCreateView(generics.ListCreateAPIView):
         return [IsAdminUser()]
 
     def get_queryset(self):
-        queryset = public_triggers_queryset(QuestionTrigger).annotate(
+        base_queryset = (
+            visible_triggers_queryset(QuestionTrigger, active_only=False)
+            if is_admin_user(self.request.user)
+            else public_triggers_queryset(QuestionTrigger)
+        )
+        queryset = base_queryset.annotate(
             question_count=Count('questions', distinct=True),
             attempts_count=Count('tests__attempts', filter=Q(tests__attempts__status='completed'), distinct=True),
             average_score=Avg('tests__attempts__score', filter=Q(tests__attempts__status='completed')),
@@ -27,7 +32,9 @@ class QuestionTriggerListCreateView(generics.ListCreateAPIView):
 class QuestionTriggerDetailView(generics.RetrieveUpdateDestroyAPIView):
     serializer_class = QuestionTriggerSerializer
     permission_classes = [IsAdminUser]
-    queryset = public_triggers_queryset(QuestionTrigger)
+
+    def get_queryset(self):
+        return visible_triggers_queryset(QuestionTrigger, active_only=False)
 
     def destroy(self, request, *args, **kwargs):
         try:

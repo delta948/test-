@@ -5,6 +5,7 @@ const path = require('path');
 const root = path.join(__dirname, 'build');
 const host = process.env.HOST || '127.0.0.1';
 const port = Number(process.env.PORT || 3000);
+const backendUrl = new URL(process.env.BACKEND_URL || 'http://127.0.0.1:8000');
 
 const types = {
   '.css': 'text/css; charset=utf-8',
@@ -37,6 +38,34 @@ function sendFile(res, filePath) {
 
 const server = http.createServer((req, res) => {
   const urlPath = decodeURIComponent(new URL(req.url, `http://${req.headers.host}`).pathname);
+
+  if (urlPath === '/api' || urlPath.startsWith('/api/')) {
+    const proxyRequest = http.request({
+      hostname: backendUrl.hostname,
+      port: backendUrl.port || 80,
+      method: req.method,
+      path: req.url,
+      headers: {
+        ...req.headers,
+        host: backendUrl.host,
+      },
+    }, (proxyResponse) => {
+      res.writeHead(proxyResponse.statusCode || 502, proxyResponse.headers);
+      proxyResponse.pipe(res);
+    });
+
+    proxyRequest.on('error', (error) => {
+      console.error(`Backend proxy error: ${error.message}`);
+      if (!res.headersSent) {
+        res.writeHead(502, { 'Content-Type': 'application/json; charset=utf-8' });
+      }
+      res.end(JSON.stringify({ error: 'Бэкенд недоступен' }));
+    });
+
+    req.pipe(proxyRequest);
+    return;
+  }
+
   const requested = path.normalize(path.join(root, urlPath));
 
   if (!requested.startsWith(root)) {
